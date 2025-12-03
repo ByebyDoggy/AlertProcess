@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  alert-processor:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.docker
+    environment:
+      - DOCKER_ENV=true  # 告诉应用这是Docker环境，不从.env文件读取配置
+    volumes:
+      - ./data:/app/data  # 持久化SQLite数据库文件
+      - ./alerts.db:/app/alerts.db  # 挂载alerts.db文件
+    restart: unless-stopped
