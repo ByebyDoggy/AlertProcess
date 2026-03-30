@@ -14,6 +14,10 @@ from detectors.implementations.arkm_label_detector import ARKMLabelDetector, ARK
 from detectors.implementations.address_age_detector import AddressAgeDetector, AddressAgeDetectorConfig
 from detectors.implementations.gas_price_detector import GasPriceDetector, GasPriceDetectorConfig
 from detectors.implementations.address_type_detector import AddressTypeDetector, AddressTypeDetectorConfig
+from detectors.implementations.flash_loan_detector import FlashLoanDetector, FlashLoanDetectorConfig
+from detectors.implementations.token_approval_detector import TokenApprovalDetector, TokenApprovalDetectorConfig
+from detectors.implementations.token_anomaly_detector import TokenAnomalyDetector, TokenAnomalyDetectorConfig
+from detectors.implementations.address_graph_detector import AddressGraphDetector, AddressGraphDetectorConfig
 
 from data_providers.context_builder import TransactionContextBuilder
 from scoring.engine import ScoringEngine, ScoringConfig, DefaultScoringConfig
@@ -68,6 +72,36 @@ class AlertProcessingPipeline:
         
         self.detectors.append(AddressTypeDetector(
             config=AddressTypeDetectorConfig()
+        ))
+
+        self.detectors.append(FlashLoanDetector(
+            config=FlashLoanDetectorConfig(
+                large_flash_loan_threshold_usd=100000.0,
+                chain_id_to_native_token_price={
+                    1: 2000.0,
+                    56: 300.0,
+                    137: 1.0,
+                }
+            )
+        ))
+
+        self.detectors.append(TokenApprovalDetector(
+            config=TokenApprovalDetectorConfig(
+                check_infinite_approval=True,
+                check_approval_to_unknown=True,
+            )
+        ))
+
+        self.detectors.append(TokenAnomalyDetector(
+            config=TokenAnomalyDetectorConfig(
+                large_transfer_threshold=1000000.0,
+            )
+        ))
+
+        self.detectors.append(AddressGraphDetector(
+            config=AddressGraphDetectorConfig(
+                centralization_threshold=5,
+            )
         ))
     
     def _init_scoring_engine(self):
