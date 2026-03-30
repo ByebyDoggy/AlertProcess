@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, '/workspace')
 
 from models import AlertInput, TransactionContext, SeverityEnum
-from routers.alert.router import AlertProcessingPipeline
+from routers.alert.router import AlertProcessingPipeline, _map_to_db_severity
 
 
 class TestAlertProcessingPipeline:
@@ -46,64 +46,36 @@ class TestAlertProcessingPipeline:
             assert "address_age_detector" in detector_names
 
 
-class TestAlertProcessingPipelineMapping:
-    """Test severity mapping in pipeline"""
+class TestSeverityMapping:
+    """Test severity mapping functions"""
     
     def test_map_severity_critical(self):
         """Test mapping CRITICAL severity"""
         from database.models import SeverityEnum as DBSeverityEnum
-        from models import SeverityEnum as ModelSeverityEnum
         
-        with patch('routers.alert.router.settings') as mock_settings:
-            mock_settings.chainId_to_provider_url = {}
-            mock_settings.arkm_cookie = None
-            
-            pipeline = AlertProcessingPipeline()
-            
-            result = pipeline._map_severity(ModelSeverityEnum.CRITICAL)
-            assert result == DBSeverityEnum.CRITICAL
+        result = _map_to_db_severity(SeverityEnum.CRITICAL)
+        assert result == DBSeverityEnum.CRITICAL
     
     def test_map_severity_high(self):
         """Test mapping HIGH severity"""
         from database.models import SeverityEnum as DBSeverityEnum
-        from models import SeverityEnum as ModelSeverityEnum
         
-        with patch('routers.alert.router.settings') as mock_settings:
-            mock_settings.chainId_to_provider_url = {}
-            mock_settings.arkm_cookie = None
-            
-            pipeline = AlertProcessingPipeline()
-            
-            result = pipeline._map_severity(ModelSeverityEnum.HIGH)
-            assert result == DBSeverityEnum.CRITICAL
+        result = _map_to_db_severity(SeverityEnum.HIGH)
+        assert result == DBSeverityEnum.CRITICAL
     
     def test_map_severity_low(self):
         """Test mapping LOW severity"""
         from database.models import SeverityEnum as DBSeverityEnum
-        from models import SeverityEnum as ModelSeverityEnum
         
-        with patch('routers.alert.router.settings') as mock_settings:
-            mock_settings.chainId_to_provider_url = {}
-            mock_settings.arkm_cookie = None
-            
-            pipeline = AlertProcessingPipeline()
-            
-            result = pipeline._map_severity(ModelSeverityEnum.LOW)
-            assert result == DBSeverityEnum.SUSPICIOUS
+        result = _map_to_db_severity(SeverityEnum.LOW)
+        assert result == DBSeverityEnum.SUSPICIOUS
     
     def test_map_severity_unknown(self):
         """Test mapping UNKNOWN severity"""
         from database.models import SeverityEnum as DBSeverityEnum
-        from models import SeverityEnum as ModelSeverityEnum
         
-        with patch('routers.alert.router.settings') as mock_settings:
-            mock_settings.chainId_to_provider_url = {}
-            mock_settings.arkm_cookie = None
-            
-            pipeline = AlertProcessingPipeline()
-            
-            result = pipeline._map_severity(ModelSeverityEnum.UNKNOWN)
-            assert result == DBSeverityEnum.UNKNOWN
+        result = _map_to_db_severity(SeverityEnum.UNKNOWN)
+        assert result == DBSeverityEnum.UNKNOWN
 
 
 def run_tests():

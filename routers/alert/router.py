@@ -134,7 +134,7 @@ class AlertProcessingPipeline:
         
         matched_rules = [r.rule_name for r in rule_results if r.matched]
         
-        severity = self._map_severity(scoring_result.severity)
+        severity = scoring_result.severity
         
         final_alert = FinalAlert(
             alert_id=alert_id,
@@ -153,20 +153,21 @@ class AlertProcessingPipeline:
         )
         
         return final_alert
-    
-    def _map_severity(self, severity: ModelSeverityEnum) -> SeverityEnum:
-        """Map model severity to database severity"""
-        mapping = {
-            ModelSeverityEnum.UNKNOWN: SeverityEnum.UNKNOWN,
-            ModelSeverityEnum.LOW: SeverityEnum.SUSPICIOUS,
-            ModelSeverityEnum.MEDIUM: SeverityEnum.SUSPICIOUS,
-            ModelSeverityEnum.HIGH: SeverityEnum.CRITICAL,
-            ModelSeverityEnum.CRITICAL: SeverityEnum.CRITICAL,
-        }
-        return mapping.get(severity, SeverityEnum.UNKNOWN)
 
 
 pipeline = AlertProcessingPipeline()
+
+
+def _map_to_db_severity(severity: ModelSeverityEnum) -> SeverityEnum:
+    """Map model severity to database severity"""
+    mapping = {
+        ModelSeverityEnum.UNKNOWN: SeverityEnum.UNKNOWN,
+        ModelSeverityEnum.LOW: SeverityEnum.SUSPICIOUS,
+        ModelSeverityEnum.MEDIUM: SeverityEnum.SUSPICIOUS,
+        ModelSeverityEnum.HIGH: SeverityEnum.CRITICAL,
+        ModelSeverityEnum.CRITICAL: SeverityEnum.CRITICAL,
+    }
+    return mapping.get(severity, SeverityEnum.UNKNOWN)
 
 
 async def process_alert_task(alert: AlertInput, alert_id: str):
@@ -178,7 +179,7 @@ async def process_alert_task(alert: AlertInput, alert_id: str):
         db_alert = db.query(AlertDB).filter(AlertDB.alert_id == alert_id).first()
         if db_alert:
             db_alert.risk_score = str(result.score)
-            db_alert.severity = result.severity
+            db_alert.severity = _map_to_db_severity(result.severity)
         db.commit()
     finally:
         db.close()
@@ -279,6 +280,101 @@ async def get_alert(
             "message": alert.message,
             "timestamp": alert.timestamp,
             "risk_score": alert.risk_score
+        }
+
+    finally:
+        db.close()
+
+
+@alertRouter.get("/alerts")
+async def list_alerts(
+        skip: int = 0,
+        limit: int = 100,
+        severity: Optional[str] = None,
+        chain_id: Optional[int] = None,
+        x_api_key: Optional[str] = Header(None),
+        api_key: Optional[str] = None
+):
+    auth_key = x_api_key if x_api_key else api_key
+
+    if not auth_key:
+        raise HTTPException(status_code=401, detail="API key is required")
+
+    if auth_key != settings.api_key:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    db = SessionLocal()
+
+    try:
+        query = db.query(AlertDB)
+        
+        if severity:
+            try:
+                sev = SeverityEnum(severity)
+                query = query.filter(AlertDB.severity == sev)
+            except ValueError:
+                pass
+        
+        total = query.count()
+        alerts = query.order_by(AlertDB.timestamp.desc()).offset(skip).limit(limit).all()
+
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "alerts": [
+                {
+                    "alert_id": alert.alert_id,
+                    "attacked_address": alert.attacked_address,
+                    "exploiter_address": alert.exploiter_address,
+                    "severity": alert.severity.value,
+                    "message": alert.message,
+                    "timestamp": alert.timestamp.isoformat() if alert.timestamp else None,
+                    "risk_score": alert.risk_score,
+                    "chain_id": getattr(alert, 'chain_id', None)
+                }
+                for alert in alerts
+            ]
+        }
+
+    finally:
+        db.close()
+
+
+@alertRouter.get("/stats")
+async def get_stats(
+        x_api_key: Optional[str] = Header(None),
+        api_key: Optional[str] = None
+):
+    auth_key = x_api_key if x_api_key else api_key
+
+    if not auth_key:
+        raise HTTPException(status_code=401, detail="API key is required")
+
+    if auth_key != settings.api_key:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    db = SessionLocal()
+
+    try:
+        total = db.query(AlertDB).count()
+        critical = db.query(AlertDB).filter(AlertDB.severity == SeverityEnum.CRITICAL).count()
+        suspicious = db.query(AlertDB).filter(AlertDB.severity == SeverityEnum.SUSPICIOUS).count()
+        unknown = db.query(AlertDB).filter(AlertDB.severity == SeverityEnum.UNKNOWN).count()
+        
+        scores = db.query(AlertDB.risk_score).filter(AlertDB.risk_score != "PENDING").all()
+        avg_score = 0
+        if scores:
+            numeric_scores = [int(s[0]) for s in scores if s[0] and s[0].isdigit()]
+            if numeric_scores:
+                avg_score = sum(numeric_scores) // len(numeric_scores)
+
+        return {
+            "total": total,
+            "critical": critical,
+            "suspicious": suspicious,
+            "unknown": unknown,
+            "avg_score": avg_score
         }
 
     finally:

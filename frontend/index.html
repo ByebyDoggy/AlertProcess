@@ -8,6 +8,7 @@
   <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="./api.js"></script>
   <style>
     .severity-critical { @apply bg-red-600 text-white; }
     .severity-high { @apply bg-orange-500 text-white; }
@@ -49,8 +50,8 @@
           <div class="text-3xl font-bold text-red-500 mt-2">{{ stats.critical }}</div>
         </div>
         <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
-          <div class="text-gray-400 text-sm">高风险警报</div>
-          <div class="text-3xl font-bold text-orange-500 mt-2">{{ stats.high }}</div>
+          <div class="text-gray-400 text-sm">可疑警报</div>
+          <div class="text-3xl font-bold text-orange-500 mt-2">{{ stats.suspicious }}</div>
         </div>
         <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
           <div class="text-gray-400 text-sm">平均风险评分</div>
@@ -226,6 +227,7 @@
         const alerts = ref([])
         const selectedAlert = ref(null)
         const lastUpdate = ref('Never')
+        const stats = ref({ total: 0, critical: 0, suspicious: 0, avgScore: 0 })
         const filters = ref({
           severity: '',
           chainId: '',
@@ -234,16 +236,6 @@
 
         let trendChart = null
         let severityChart = null
-
-        const stats = computed(() => {
-          const total = alerts.value.length
-          const critical = alerts.value.filter(a => a.severity === 'CRITICAL').length
-          const high = alerts.value.filter(a => a.severity === 'HIGH').length
-          const avgScore = total > 0 
-            ? Math.round(alerts.value.reduce((sum, a) => sum + (parseInt(a.risk_score) || 0), 0) / total)
-            : 0
-          return { total, critical, high, avgScore }
-        })
 
         const filteredAlerts = computed(() => {
           return alerts.value.filter(alert => {
@@ -263,16 +255,29 @@
 
         async function fetchAlerts() {
           try {
-            const response = await axios.get('/api/alerts')
-            alerts.value = response.data.alerts || []
+            const data = await window.ApiService.getAlerts({ limit: 100 })
+            alerts.value = data.alerts || []
             lastUpdate.value = new Date().toLocaleTimeString('zh-CN')
             updateCharts()
           } catch (error) {
             console.error('Failed to fetch alerts:', error)
-            // Use mock data for demo
             alerts.value = generateMockData()
             lastUpdate.value = new Date().toLocaleTimeString('zh-CN')
             updateCharts()
+          }
+        }
+
+        async function fetchStats() {
+          try {
+            const data = await window.ApiService.getStats()
+            stats.value = {
+              total: data.total || 0,
+              critical: data.critical || 0,
+              suspicious: data.suspicious || 0,
+              avgScore: data.avg_score || 0
+            }
+          } catch (error) {
+            console.error('Failed to fetch stats:', error)
           }
         }
 
@@ -411,6 +416,7 @@
 
         onMounted(() => {
           fetchAlerts()
+          fetchStats()
         })
 
         return {
@@ -421,6 +427,7 @@
           stats,
           filteredAlerts,
           fetchAlerts,
+          fetchStats,
           getSeverityClass,
           getScoreColor,
           getScoreTextColor,
