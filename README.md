@@ -1,185 +1,185 @@
 # AlertProcessor
 
 ## 项目概述
-AlertProcessor是一个基于FastAPI的区块链安全告警处理服务，用于接收、处理和评估区块链交易的安全告警信息。该服务通过一系列处理器对告警进行多维度分析，包括利用者地址标签检查、创建时间分析和交易费用评估等，以确定告警的可信度和风险级别。
+
+AlertProcessor 是一个基于 FastAPI 的区块链安全告警处理服务，灵感来自 [Forta Network](https://forta.org/) 和 [BlockSec](https://blocksec.com/)。用于接收、处理和分析区块链交易的安全告警信息。
 
 ## 主要功能
 
-- **告警接收与处理**：提供Webhook接口接收区块链安全告警信息
-- **多维度风险评估**：
-  - 利用者地址标签检查（使用ARKM Intelligence API）
-  - 受害者地址标签检查
-  - 利用者地址创建时间分析（使用Moralis API）
-  - 交易Gas价格异常检测
-  - 空地址检测
-- **数据库存储**：使用SQLite存储告警信息和合约地址数据
-- **Docker支持**：提供完整的Docker部署方案
-- **配置管理**：支持环境变量和配置文件的灵活配置
+- **告警接收与处理**：Webhook 接口接收来自区块链安全监控系统的告警
+- **多维度检测框架**：基于插件化的 Detector 架构
+  - ARKM 实体标签检测
+  - 地址年龄检测
+  - Gas 价格异常检测
+  - 闪电贷检测
+  - Token 授权检测
+  - Token 异常检测
+  - 地址图谱分析
+- **规则引擎**：灵活的可配置规则进行告警筛选和分类
+- **评分系统**：多维度风险评分
+- **告警通知**：Webhook 通知
+- **前端仪表板**：可视化告警管理和分析
 
 ## 技术栈
 
-- **后端框架**：FastAPI
-- **数据库**：SQLite + SQLAlchemy
-- **配置管理**：Pydantic Settings
-- **区块链接口**：Web3.py、Moralis API、ARKM Intelligence API
-- **部署**：Docker、Docker Compose
+- **后端**：FastAPI、SQLAlchemy、Pydantic
+- **前端**：Vue 3、Tailwind CSS、Chart.js
+- **数据库**：SQLite
+- **区块链**：Web3.py、Moralis API、ARKM Intelligence API
 
 ## 项目结构
 
 ```
 AlertProcessor/
-├── main.py                 # FastAPI应用入口
-├── config/                 # 配置相关模块
-│   ├── __init__.py
-│   └── model.py            # 配置模型定义
-├── database/               # 数据库相关模块
-│   ├── __init__.py
-│   └── models.py           # 数据库模型定义
-├── processor/              # 告警处理器模块
-│   ├── __init__.py
-│   ├── core.py             # 处理器基类
-│   ├── chained_processor.py # 链式处理器
-│   ├── exploiter_arkm_label_check.py # 利用者标签检查
-│   ├── victim_label_check.py # 受害者标签检查
-│   ├── exploiter_create_time.py # 利用者创建时间检查
-│   ├── gas_price_check.py  # Gas价格检查
-│   ├── null_address_detector.py # 空地址检测
-│   └── models.py           # 处理器相关数据模型
-├── routers/                # API路由模块
-│   ├── __init__.py
-│   └── alert/              # 告警相关路由
-│       └── router.py
-├── .env                    # 本地开发配置
-├── .env.docker             # Docker环境配置
-├── Dockerfile              # Docker构建文件
-├── docker-compose.yml      # Docker Compose配置
-└── requirements.txt        # Python依赖列表
+├── main.py                    # FastAPI 应用入口
+├── config/                     # 配置管理
+│   └── model.py               # Pydantic Settings
+├── database/                   # 数据库模型
+│   └── models.py
+├── models/                     # 核心数据模型
+│   └── __init__.py            # AlertInput, DetectionResult, FinalAlert
+├── detectors/                   # 插件化检测器
+│   ├── base.py                 # Detector 基类 + Registry
+│   └── implementations/
+│       ├── arkm_label_detector.py
+│       ├── address_age_detector.py
+│       ├── gas_price_detector.py
+│       ├── address_type_detector.py
+│       ├── flash_loan_detector.py
+│       ├── token_approval_detector.py
+│       ├── token_anomaly_detector.py
+│       └── address_graph_detector.py
+├── rules/                       # 规则引擎
+│   └── engine.py
+├── scoring/                     # 评分引擎
+│   └── engine.py
+├── notifiers/                   # 通知渠道
+│   └── base.py
+├── routers/                     # API 路由
+│   └── alert/
+│       └── router.py           # /alert/* 端点
+├── data_providers/               # 数据提供者
+│   ├── base.py
+│   └── context_builder.py       # TransactionContext 构建
+├── frontend/                    # 前端仪表板
+│   ├── index.html
+│   ├── api.js
+│   ├── package.json
+│   └── vite.config.js
+├── tests/                       # 单元测试
+│   └── test_*.py
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
 
-## 安装与运行
+## 快速开始
 
-### 本地开发环境
+### 1. 安装依赖
 
-1. **创建虚拟环境**
-```bash
-python -m venv .venv
-```
-
-2. **激活虚拟环境**
-```bash
-# Windows
-.\.venv\Scripts\activate
-
-# Linux/macOS
-source .venv/bin/activate
-```
-
-3. **安装依赖**
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **配置环境变量**
-编辑`.env`文件，填写必要的API密钥和配置参数
+### 2. 配置环境变量
 
-5. **启动服务**
+创建 `.env` 文件：
+
+```env
+api_key=your-secret-api-key
+moralis_api_key=your-moralis-api-key
+arkm_cookie=your-arkm-cookie
+```
+
+### 3. 启动服务
+
 ```bash
 python main.py
 ```
 
-### Docker部署
+服务将在 http://localhost:8000 启动
 
-1. **构建Docker镜像**
-```bash
-docker-compose build
-```
+### 4. Docker 部署
 
-2. **启动服务**
 ```bash
 docker-compose up -d
 ```
 
-3. **查看服务日志**
-```bash
-docker-compose logs -f
+## API 接口
+
+### 健康检查
+
+```
+GET /
 ```
 
-## API接口
+### 提交告警
 
-### 告警接收接口
-- **URL**: `/alert`
-- **Method**: `POST`
-- **请求体**:
-  ```json
-  {
-    "chain_id": 1,
-    "attacked_address": "0x123...",
-    "exploiter_address": "0x456...",
-    "tx_hash": "0x789..."
-  }
-  ```
-- **响应**:
-  ```json
-  {
-    "alert_id": "uuid-string",
-    "status": "received",
-    "message": "Alert received and processing started"
-  }
-  ```
+```
+POST /alert/submit
+X-API-Key: your-api-key
 
-### 健康检查接口
-- **URL**: `/`
-- **Method**: `GET`
-- **响应**:
-  ```json
-  {
-    "status": "healthy",
-    "message": "Alert Webhook Service is running"
-  }
-  ```
+{
+  "chain_id": 1,
+  "tx_hash": "0x...",
+  "attacked_address": "0x...",
+  "exploiter_address": "0x..."
+}
+```
 
-## 处理器链
+### 列出告警
 
-系统使用链式处理器模式，按顺序应用多个处理器对告警进行分析：
+```
+GET /alert/alerts?skip=0&limit=100&severity=CRITICAL
+X-API-Key: your-api-key
+```
 
-1. `ExploiterARKMLabelCheckAlertProcessor` - 检查利用者地址的标签信息
-2. `VictimARKMLabelCheckAlertProcessor` - 检查受害者地址的标签信息
-3. `ExploiterCreateTimeProcessor` - 分析利用者地址的创建时间
-4. `TransactionGasPriceCheckAlertProcessor` - 检查交易Gas价格是否异常
+### 告警统计
 
-每个处理器返回的结果包含：
-- `need_more_check`: 是否需要继续后续处理器检查
-- `score`: 风险评分
-- `process_details`: 处理详情
+```
+GET /alert/stats
+X-API-Key: your-api-key
+```
 
-## 配置说明
+## Detector 架构
 
-主要配置参数位于`.env`文件：
+每个 Detector 实现以下接口：
 
-- `api_key`: API访问密钥
-- `database_url`: 数据库连接URL
-- `host`/`port`: 服务监听地址和端口
-- `moralis_api_key`: Moralis API密钥
-- `arkm_cookie`: ARKM Intelligence API cookie
-- `chainId_to_provider_url`: 各链的RPC提供者URL
+```python
+class Detector(ABC):
+    name: str
+    config: DetectorConfig
+    
+    async def detect(
+        self, 
+        alert: AlertInput, 
+        context: TransactionContext
+    ) -> DetectionResult
+```
 
-在Docker环境中，可通过`.env.docker`文件或环境变量覆盖默认配置。
+### 内置检测器
 
-## 注意事项
+| 检测器 | 功能 |
+|--------|------|
+| ARKMLabelDetector | 检查地址是否被标记为恶意实体 |
+| AddressAgeDetector | 检测新创建的地址 |
+| GasPriceDetector | 检测异常高的 Gas 价格 |
+| AddressTypeDetector | 检测空地址和合约创建 |
+| FlashLoanDetector | 检测闪电贷攻击 |
+| TokenApprovalDetector | 检测可疑的 Token 授权 |
+| TokenAnomalyDetector | 检测异常的 Token 转账 |
+| AddressGraphDetector | 分析地址与交易所/攻击者的关联 |
 
-1. **API密钥配置**：确保正确配置Moralis和ARKM Intelligence的API密钥，否则相关处理器可能无法正常工作
+## 测试
 
-2. **数据库权限**：在Docker部署时，确保数据目录具有正确的读写权限
+```bash
+pytest tests/ -v
+```
 
-3. **环境变量优先级**：环境变量始终优先于配置文件设置
+## 前端仪表板
 
-4. **Docker环境检测**：服务会通过`DOCKER_ENV`环境变量检测是否在Docker环境中运行，从而决定是否加载`.env`文件
+访问 http://localhost:8000 查看可视化告警仪表板。
 
-## 日志和监控
+## License
 
-系统使用Python标准日志模块记录关键操作和错误信息。在Docker部署时，可以通过`docker-compose logs`查看服务日志。
-
-## 许可证
-
-[MIT License](https://opensource.org/licenses/MIT)
-        
+MIT
