@@ -122,6 +122,5 @@ class AddressTypeDetector(Detector):
         )
 
 
-# Auto-register detector
 from detectors.base import DetectorRegistry
 DetectorRegistry.register(AddressTypeDetector)

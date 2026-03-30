@@ -1,67 +1,168 @@
+import asyncio
 import requests
 from fastapi import APIRouter, Header, HTTPException, BackgroundTasks
-from processor.core import AlertInput
+from models import AlertInput
 import uuid
 from datetime import datetime
 from typing import Optional
+
 from config import settings
 from database.models import SessionLocal, AlertDB, SeverityEnum
-from processor import *
+
+from detectors.base import DetectorRegistry, Detector
+from detectors.implementations.arkm_label_detector import ARKMLabelDetector, ARKMLabelDetectorConfig
+from detectors.implementations.address_age_detector import AddressAgeDetector, AddressAgeDetectorConfig
+from detectors.implementations.gas_price_detector import GasPriceDetector, GasPriceDetectorConfig
+from detectors.implementations.address_type_detector import AddressTypeDetector, AddressTypeDetectorConfig
+
+from data_providers.context_builder import TransactionContextBuilder
+from scoring.engine import ScoringEngine, ScoringConfig, DefaultScoringConfig
+from rules.engine import RuleEngine, Rule, RuleConfig
+from models import FinalAlert, SeverityEnum as ModelSeverityEnum
+from database.models import SeverityEnum
+
+
 alertRouter = APIRouter(
     prefix="/alert",
     tags=["alert"]
 )
-exploiter_label_processor = ExploiterARKMLabelCheckAlertProcessor(
-    config=ExploiterARKMLabelCheckAlertProcessorConfig(
-        arkm_cookie=settings.arkm_cookie,
-    ),
-)
-victim_label_processor = VictimARKMLabelCheckAlertProcessor(
-    config=VictimARKMLabelCheckAlertProcessorConfig(
-        arkm_cookie=settings.arkm_cookie,
-    ),
-)
-exploiter_create_time_processor = ExploiterCreateTimeProcessor(
-    config=ExploiterCreateTimeAlertProcessorConfig(
-    ),
-)
-gas_price_check_processor = TransactionGasPriceCheckAlertProcessor(
-    config=GasPriceCheckConfig(
-        chain_id_to_provider_url=settings.chainId_to_provider_url,
-    ),
-)
-chained_processor = ChainedAlertProcessor(
-    config=ChainedProcessorConfig(
-        processors=[
-            exploiter_label_processor,
-            victim_label_processor,
-            exploiter_create_time_processor,
-            gas_price_check_processor,
-        ]
-    )
-)
 
-async def process_alert(alert: AlertInput,alert_id: str):
-    result = await chained_processor.process_alert(alert)
+
+class AlertProcessingPipeline:
+    """
+    Unified pipeline using Detector-based architecture
+    Replaces the old Processor chain
+    """
+    
+    def __init__(self):
+        self.context_builder = TransactionContextBuilder(
+            chain_id_to_provider_url=settings.chainId_to_provider_url
+        )
+        self._init_detectors()
+        self._init_scoring_engine()
+        self._init_rule_engine()
+    
+    def _init_detectors(self):
+        """Initialize all detectors"""
+        self.detectors: list[Detector] = []
+        
+        if settings.arkm_cookie:
+            self.detectors.append(ARKMLabelDetector(
+                config=ARKMLabelDetectorConfig(arkm_cookie=settings.arkm_cookie)
+            ))
+        
+        self.detectors.append(AddressAgeDetector(
+            config=AddressAgeDetectorConfig(new_address_threshold_days=7)
+        ))
+        
+        self.detectors.append(GasPriceDetector(
+            config=GasPriceDetectorConfig(
+                threshold_usd=100.0,
+                chain_id_to_native_token_price={
+                    1: 2000.0,
+                    56: 700.0,
+                    137: 1.0,
+                }
+            )
+        ))
+        
+        self.detectors.append(AddressTypeDetector(
+            config=AddressTypeDetectorConfig()
+        ))
+    
+    def _init_scoring_engine(self):
+        """Initialize scoring engine with exploit analysis config"""
+        self.scoring_engine = ScoringEngine(
+            config=DefaultScoringConfig.exploit_analysis()
+        )
+    
+    def _init_rule_engine(self):
+        """Initialize rule engine"""
+        self.rule_engine = RuleEngine()
+    
+    async def process(self, alert: AlertInput) -> FinalAlert:
+        """Execute full detection pipeline"""
+        alert_id = str(uuid.uuid4())
+        
+        context = await self.context_builder.build(alert)
+        
+        detections = []
+        for detector in self.detectors:
+            try:
+                result = await detector.detect_with_cache(alert, context)
+                detections.append(result)
+            except Exception as e:
+                pass
+        
+        scoring_result = self.scoring_engine.calculate(context, detections)
+        
+        rule_results = await self.rule_engine.evaluate(context, detections)
+        
+        matched_rules = [r.rule_name for r in rule_results if r.matched]
+        
+        severity = self._map_severity(scoring_result.severity)
+        
+        final_alert = FinalAlert(
+            alert_id=alert_id,
+            chain_id=alert.chain_id,
+            tx_hash=alert.tx_hash,
+            severity=severity,
+            score=scoring_result.total_score,
+            detections=detections,
+            matched_rules=matched_rules,
+            context=context,
+            timestamp=datetime.now(),
+            metadata={
+                "scoring_details": scoring_result.dimension_scores,
+                "rule_results": [r.model_dump() for r in rule_results],
+            }
+        )
+        
+        return final_alert
+    
+    def _map_severity(self, severity: ModelSeverityEnum) -> SeverityEnum:
+        """Map model severity to database severity"""
+        mapping = {
+            ModelSeverityEnum.UNKNOWN: SeverityEnum.UNKNOWN,
+            ModelSeverityEnum.LOW: SeverityEnum.SUSPICIOUS,
+            ModelSeverityEnum.MEDIUM: SeverityEnum.SUSPICIOUS,
+            ModelSeverityEnum.HIGH: SeverityEnum.CRITICAL,
+            ModelSeverityEnum.CRITICAL: SeverityEnum.CRITICAL,
+        }
+        return mapping.get(severity, SeverityEnum.UNKNOWN)
+
+
+pipeline = AlertProcessingPipeline()
+
+
+async def process_alert_task(alert: AlertInput, alert_id: str):
+    """Background task to process alert"""
+    result = await pipeline.process(alert)
+    
     db = SessionLocal()
-    db_alert = db.query(AlertDB).filter(AlertDB.alert_id == alert_id).first()
-    if db_alert:
-        db_alert.risk_score = str(result.score)
-    db.commit()
-    db.refresh(db_alert)
-    if settings.notify_webhook_url:
-        if result.score>200:
-            requests.post(settings.notify_webhook_url,json={
+    try:
+        db_alert = db.query(AlertDB).filter(AlertDB.alert_id == alert_id).first()
+        if db_alert:
+            db_alert.risk_score = str(result.score)
+            db_alert.severity = result.severity
+        db.commit()
+    finally:
+        db.close()
+    
+    if settings.notify_webhook_url and result.score > 200:
+        try:
+            requests.post(settings.notify_webhook_url, json={
                 "alert_id": alert_id,
                 "attacked_address": alert.attacked_address,
                 "exploiter_address": alert.exploiter_address,
                 "risk_score": result.score,
+                "severity": result.severity.value,
                 "result": result.model_dump(),
             })
-    return result
+        except Exception:
+            pass
 
 
-# Webhook端点，接收alert数据并进行鉴权
 @alertRouter.post("/submit")
 async def receive_alert(
         alert: AlertInput,
@@ -69,8 +170,6 @@ async def receive_alert(
         x_api_key: Optional[str] = Header(None),
         api_key: Optional[str] = None
 ):
-    # 鉴权逻辑：检查请求头中的x-api-key或查询参数中的api_key
-    # 优先使用请求头中的api_key
     auth_key = x_api_key if x_api_key else api_key
 
     if not auth_key:
@@ -79,33 +178,27 @@ async def receive_alert(
     if auth_key != settings.api_key:
         raise HTTPException(status_code=403, detail="Invalid API key")
 
-    # 生成唯一的alert_id
     alert_id = str(uuid.uuid4())
-
-    # 创建数据库会话
 
     db = SessionLocal()
 
     try:
-        # 将接收到的alert数据保存到数据库
         db_alert = AlertDB(
             alert_id=alert_id,
             attacked_address=alert.attacked_address,
             exploiter_address=alert.exploiter_address,
-            severity=SeverityEnum.SUSPICIOUS,  # 默认设置为可疑，可根据需要修改
+            severity=SeverityEnum.SUSPICIOUS,
             message=f"Alert for transaction {alert.tx_hash}",
             timestamp=datetime.now(),
-            risk_score="PENDING"  # 初始状态为待处理
+            risk_score="PENDING"
         )
 
         db.add(db_alert)
         db.commit()
         db.refresh(db_alert)
 
-        # 在后台启动可信度检测任务
-        background_tasks.add_task(process_alert, alert, alert_id)
+        background_tasks.add_task(process_alert_task, alert, alert_id)
 
-        # 立即返回响应
         return {
             "status": "success",
             "message": "Alert received and authenticated",
@@ -122,14 +215,12 @@ async def receive_alert(
         db.close()
 
 
-# 获取Alert详情的端点
 @alertRouter.get("/alerts/{alert_id}")
 async def get_alert(
         alert_id: str,
         x_api_key: Optional[str] = Header(None),
         api_key: Optional[str] = None
 ):
-    # 鉴权逻辑
     auth_key = x_api_key if x_api_key else api_key
 
     if not auth_key:
@@ -138,17 +229,14 @@ async def get_alert(
     if auth_key != settings.api_key:
         raise HTTPException(status_code=403, detail="Invalid API key")
 
-    # 获取数据库会话
     db = SessionLocal()
 
     try:
-        # 查询Alert
         alert = db.query(AlertDB).filter(AlertDB.alert_id == alert_id).first()
 
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
 
-        # 返回Alert详情
         return {
             "alert_id": alert.alert_id,
             "attacked_address": alert.attacked_address,
