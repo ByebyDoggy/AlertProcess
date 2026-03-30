@@ -115,6 +115,7 @@ class AddressGraphDetector(Detector):
                 flow_analysis["indicators"].append("contract_call_with_value")
             else:
                 flow_analysis["direction"] = "direct_transfer"
+                flow_analysis["potential_type"] = "direct_transfer"
         
         if self._is_contract_call(context):
             flow_analysis["potential_type"] = "contract_interaction"

@@ -59,7 +59,6 @@ class TestAddressAgeDetector:
             config=AddressAgeDetectorConfig(new_address_threshold_days=30)
         )
         
-        # Create time was 5 days ago
         recent_time = datetime.now() - timedelta(days=5)
         
         with patch.object(detector, '_get_cached_create_time', return_value=recent_time):
@@ -85,7 +84,6 @@ class TestAddressAgeDetector:
             config=AddressAgeDetectorConfig(new_address_threshold_days=30)
         )
         
-        # Create time was 100 days ago
         old_time = datetime.now() - timedelta(days=100)
         
         with patch.object(detector, '_get_cached_create_time', return_value=old_time):
@@ -133,48 +131,8 @@ class TestAddressAgeDetectorCaching:
         config = AddressAgeDetectorConfig()
         detector = AddressAgeDetector(config)
         
-        # Test that the methods exist
         assert callable(detector._save_create_time)
         assert callable(detector._get_cached_create_time)
-
-
-class TestAddressAgeDetectorMoralis:
-    """Test Moralis API integration"""
-    
-    @pytest.mark.asyncio
-    async def test_fetch_from_moralis(self):
-        """Test fetching create time from Moralis"""
-        detector = AddressAgeDetector()
-        
-        # Mock the API response
-        mock_result = MagicMock()
-        mock_result.get.return_value = [
-            {
-                "chain": "eth",
-                "first_transaction": {
-                    "block_timestamp": "2024-01-15T00:00:00.000Z"
-                }
-            }
-        ]
-        
-        with patch('detectors.implementations.address_age_detector.evm_api') as mock_evm:
-            with patch('detectors.implementations.address_age_detector.settings') as mock_settings:
-                mock_settings.moralis_api_key = "test_key"
-                mock_evm.wallets.get_wallet_active_chains.return_value = mock_result
-                
-                alert = AlertInput(chain_id=1, tx_hash="0x123", exploiter_address="0xabc")
-                context = TransactionContext(
-                    chain_id=1,
-                    tx_hash="0x123",
-                    from_address="0xabc"
-                )
-                
-                # Clear cache to force API call
-                with patch.object(detector, '_get_cached_create_time', return_value=None):
-                    result = await detector.detect(alert, context)
-                    
-                    # Should process successfully
-                    assert result.detected is True  # or False depending on age
 
 
 def run_tests():

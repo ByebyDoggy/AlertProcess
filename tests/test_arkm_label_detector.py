@@ -62,22 +62,21 @@ class TestARKMLabelDetector:
         )
         detector = ARKMLabelDetector(config)
         
-        # Mock database query to return None (force API call)
-        # Mock the API response
-        with patch.object(detector, '_fetch_arkm_entity_type', return_value=("hacker", "entity_123", "Hacker Group")):
-            alert = AlertInput(chain_id=1, tx_hash="0x123", exploiter_address="0xabc")
-            context = TransactionContext(
-                chain_id=1,
-                tx_hash="0x123",
-                from_address="0xabc"
-            )
-            
-            result = await detector.detect(alert, context)
-            
-            assert result.detected is True
-            assert result.severity == SeverityEnum.CRITICAL
-            assert result.alert_type == "MALICIOUS_ENTITY"
-            assert result.metadata["entity_type"] == "hacker"
+        with patch.object(detector, '_get_entity_type_from_db', return_value=(None, None)):
+            with patch.object(detector, '_fetch_arkm_entity_type', return_value=("hacker", "entity_123", "Hacker Group")):
+                alert = AlertInput(chain_id=1, tx_hash="0x123", exploiter_address="0xabc")
+                context = TransactionContext(
+                    chain_id=1,
+                    tx_hash="0x123",
+                    from_address="0xabc"
+                )
+                
+                result = await detector.detect(alert, context)
+                
+                assert result.detected is True
+                assert result.severity == SeverityEnum.CRITICAL
+                assert result.alert_type == "MALICIOUS_ENTITY"
+                assert result.metadata["entity_type"] == "hacker"
     
     @pytest.mark.asyncio
     async def test_detect_known_entity(self):
@@ -89,20 +88,20 @@ class TestARKMLabelDetector:
         )
         detector = ARKMLabelDetector(config)
         
-        with patch.object(detector, '_fetch_arkm_entity_type', return_value=("exchange", "entity_456", "Binance")):
-            alert = AlertInput(chain_id=1, tx_hash="0x123", exploiter_address="0xabc")
-            context = TransactionContext(
-                chain_id=1,
-                tx_hash="0x123",
-                from_address="0xabc"
-            )
-            
-            result = await detector.detect(alert, context)
-            
-            # Known entity not in blacklist, should still detect but with LOW severity
-            assert result.detected is True
-            assert result.alert_type == "KNOWN_ENTITY"
-            assert result.metadata["is_blacklisted"] is False
+        with patch.object(detector, '_get_entity_type_from_db', return_value=(None, None)):
+            with patch.object(detector, '_fetch_arkm_entity_type', return_value=("defi_protocol", "entity_456", "Uniswap")):
+                alert = AlertInput(chain_id=1, tx_hash="0x123", exploiter_address="0xabc")
+                context = TransactionContext(
+                    chain_id=1,
+                    tx_hash="0x123",
+                    from_address="0xabc"
+                )
+                
+                result = await detector.detect(alert, context)
+                
+                assert result.detected is True
+                assert result.alert_type == "KNOWN_ENTITY"
+                assert result.metadata["is_blacklisted"] is False
 
 
 class TestARKMLabelDetectorCaching:

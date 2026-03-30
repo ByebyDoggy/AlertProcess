@@ -139,7 +139,8 @@ class AddressAgeDetector(Detector):
                     if chain.get('chain') == moralis_chain:
                         first_tx = chain.get('first_transaction')
                         if first_tx:
-                            create_time = datetime.fromisoformat(first_tx['block_timestamp'])
+                            ts = first_tx['block_timestamp'].replace('Z', '+00:00')
+                            create_time = datetime.fromisoformat(ts)
                             self._save_create_time(address, alert.chain_id, create_time)
                             fetched_from_api = True
                             break
