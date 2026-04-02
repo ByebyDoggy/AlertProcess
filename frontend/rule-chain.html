@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>规则链配置 - 链上安全监控</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="./api.js"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .node-card {
+      cursor: move;
+      user-select: none;
+      transition: box-shadow 0.2s, transform 0.2s;
+    }
+    .node-card:hover {
+      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+      transform: scale(1.02);
+    }
+    .node-card.selected {
+      ring: 2px;
+      ring-color: #3b82f6;
+    }
+    .edge-line {
+      stroke: #6366f1;
+      stroke-width: 2;
+      fill: none;
+    }
+    .edge-line:hover {
+      stroke: #818cf8;
+      stroke-width: 3;
+    }
+    .palette-item {
+      cursor: grab;
+    }
+    .palette-item:active {
+      cursor: grabbing;
+    }
+    .canvas-area {
+      background-image: radial-gradient(circle, #374151 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    .modal-overlay {
+      backdrop-filter: blur(4px);
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+  <div id="app">
+    <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
+      <div class="flex justify-between items-center max-w-full mx-auto">
+        <div class="flex items-center gap-6">
+          <div>
+            <h1 class="text-2xl font-bold text-white">规则链配置</h1>
+            <p class="text-gray-400 text-sm">可视化拖拽式规则链设计与配置</p>
+          </div>
+          <nav class="flex gap-4">
+            <a href="./index.html" class="text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-700 transition">告警仪表盘</a>
+            <span class="text-blue-400 px-3 py-2 rounded-lg bg-gray-700">规则链配置</span>
+          </nav>
+        </div>
+        <button @click="saveChain" :disabled="saving" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg text-white font-medium transition">
+          {{ saving ? '保存中...' : '保存规则链' }}
+        </button>
+      </div>
+    </header>
+
+    <div class="flex h-[calc(100vh-80px)]">
+      <div class="w-64 bg-gray-800 border-r border-gray-700 p-4 overflow-y-auto">
+        <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">节点组件</h3>
+        <div class="space-y-2">
+          <div v-for="item in nodePalette" :key="item.type" 
+               class="palette-item bg-gray-700 hover:bg-gray-600 rounded-lg p-3 border border-gray-600"
+               draggable="true" @dragstart="onDragStart($event, item)">
+            <div class="flex items-center gap-2">
+              <span :class="item.iconColor" class="text-lg">{{ item.icon }}</span>
+              <span class="text-sm text-gray-200">{{ item.label }}</span>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 mt-6">已有规则链</h3>
+        <div class="space-y-2">
+          <div v-for="chain in ruleChains" :key="chain.id"
+               @click="loadChain(chain)"
+               :class="{'bg-blue-600': currentChain && currentChain.id === chain.id}"
+               class="bg-gray-700 hover:bg-gray-600 rounded-lg p-3 border border-gray-600 cursor-pointer transition">
+            <div class="text-sm text-gray-200">{{ chain.name }}</div>
+            <div class="text-xs text-gray-400 mt-1">{{ chain.enabled ? '已启用' : '已禁用' }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 flex flex-col">
+        <div class="p-4 border-b border-gray-700 flex items-center justify-between bg-gray-800">
+          <div class="flex items-center gap-4">
+            <input v-model="chainName" placeholder="规则链名称..." 
+                   class="bg-gray-700 text-white px-4 py-2 rounded-lg w-64 border border-gray-600 focus:border-blue-500 focus:outline-none">
+            <input v-model="chainDescription" placeholder="描述（可选）..." 
+                   class="bg-gray-700 text-white px-4 py-2 rounded-lg w-80 border border-gray-600 focus:border-blue-500 focus:outline-none">
+            <label class="flex items-center gap-2 text-gray-300">
+              <input type="checkbox" v-model="chainEnabled" class="w-4 h-4 rounded">
+              启用
+            </label>
+          </div>
+          <div class="flex gap-3">
+            <button @click="clearCanvas" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition">清空</button>
+            <button @click="createNewChain" class="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white transition">新建规则链</button>
+          </div>
+        </div>
+
+        <div class="flex-1 canvas-area relative overflow-hidden" ref="canvasContainer"
+             @drop="onDrop" @dragover.prevent @click="onCanvasClick">
+          <svg class="absolute inset-0 w-full h-full pointer-events-none" style="z-index: 0;">
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
+              </marker>
+            </defs>
+            <g v-for="edge in edges" :key="edge.id">
+              <path :d="getEdgePath(edge)" class="edge-line" marker-end="url(#arrowhead)"
+                    @click.stop="onEdgeClick(edge)"/>
+            </g>
+          </svg>
+          
+          <div v-for="node in nodes" :key="node.id"
+               :class="{'ring-2 ring-blue-500': selectedNode && selectedNode.id === node.id}"
+               class="node-card absolute bg-gray-800 rounded-xl p-4 border border-gray-600 shadow-lg"
+               :style="{ left: node.position.x + 'px', top: node.position.y + 'px', zIndex: selectedNode && selectedNode.id === node.id ? 10 : 1 }"
+               @mousedown="onNodeMouseDown($event, node)"
+               @click.stop="onNodeClick(node)">
+            <div class="flex items-center gap-2 mb-2">
+              <span :class="getNodeColor(node.type)" class="text-xl">{{ getNodeIcon(node.type) }}</span>
+              <span class="font-medium text-white">{{ node.label }}</span>
+            </div>
+            <div class="text-xs text-gray-400">
+              {{ getNodeTypeLabel(node.type) }}
+            </div>
+            <button @click.stop="deleteNode(node.id)" 
+                    class="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-600 rounded-full text-white text-sm flex items-center justify-center">×</button>
+          </div>
+
+          <div v-if="nodes.length === 0" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div class="text-center text-gray-500">
+              <div class="text-4xl mb-2">📋</div>
+              <div>从左侧拖拽节点到此处开始配置规则链</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showConfigModal" class="fixed inset-0 bg-black/60 modal-overlay flex items-center justify-center z-50">
+      <div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg mx-4 border border-gray-700">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-xl font-bold text-white">配置节点</h3>
+          <button @click="showConfigModal = false" class="text-gray-400 hover:text-white">×</button>
+        </div>
+        
+        <div v-if="configNode" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-300 mb-1">节点名称</label>
+            <input v-model="configNode.label" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+          </div>
+          
+          <div v-if="configNode.type === 'condition'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">条件字段</label>
+            <input v-model="configNode.config.field" placeholder="例如: detector.flash_loan" 
+                   class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+            
+            <label class="block text-sm font-medium text-gray-300 mb-1 mt-3">操作符</label>
+            <select v-model="configNode.config.operator" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+              <option value="equals">等于</option>
+              <option value="not_equals">不等于</option>
+              <option value="contains">包含</option>
+              <option value="greater_than">大于</option>
+              <option value="less_than">小于</option>
+              <option value="regex">正则匹配</option>
+            </select>
+            
+            <label class="block text-sm font-medium text-gray-300 mb-1 mt-3">比较值</label>
+            <input v-model="configNode.config.value" placeholder="比较值"
+                   class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+          </div>
+          
+          <div v-if="configNode.type === 'action'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">操作类型</label>
+            <select v-model="configNode.config.actionType" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+              <option value="set_severity">设置严重级别</option>
+              <option value="set_score">设置风险评分</option>
+              <option value="add_tag">添加标签</option>
+              <option value="notify">发送通知</option>
+            </select>
+            
+            <label class="block text-sm font-medium text-gray-300 mb-1 mt-3">参数值</label>
+            <input v-model="configNode.config.actionValue" placeholder="参数值"
+                   class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+          </div>
+          
+          <div v-if="configNode.type === 'filter'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">过滤条件</label>
+            <textarea v-model="configNode.config.expression" placeholder="例如: context.gas_price > 100"
+                      rows="3"
+                      class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none"></textarea>
+          </div>
+          
+          <div v-if="configNode.type === 'detector'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">检测器类型</label>
+            <select v-model="configNode.config.detectorType" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+              <option value="flash_loan">Flash Loan 检测</option>
+              <option value="token_approval">Token 授权检测</option>
+              <option value="token_anomaly">Token 异常检测</option>
+              <option value="address_graph">地址图谱分析</option>
+              <option value="gas_price">Gas 价格检测</option>
+              <option value="address_age">地址年龄检测</option>
+            </select>
+          </div>
+          
+          <div class="flex justify-end gap-3 mt-6">
+            <button @click="showConfigModal = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition">取消</button>
+            <button @click="applyNodeConfig" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white transition">应用配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showEdgeModal" class="fixed inset-0 bg-black/60 modal-overlay flex items-center justify-center z-50">
+      <div class="bg-gray-800 rounded-xl p-6 w-full max-w-md mx-4 border border-gray-700">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-xl font-bold text-white">连接设置</h3>
+          <button @click="showEdgeModal = false" class="text-gray-400 hover:text-white">×</button>
+        </div>
+        
+        <div class="space-y-4">
+          <div class="flex gap-4 text-sm">
+            <span class="text-gray-400">从:</span>
+            <span class="text-white">{{ getNodeLabel(edgeSource) }}</span>
+          </div>
+          <div class="flex gap-4 text-sm">
+            <span class="text-gray-400">到:</span>
+            <span class="text-white">{{ getNodeLabel(edgeTarget) }}</span>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-gray-300 mb-1">连接标签</label>
+            <input v-model="pendingEdgeLabel" placeholder="例如: 条件满足/不满足"
+                   class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+          </div>
+          
+          <div class="flex justify-end gap-3 mt-6">
+            <button @click="deleteEdge" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-white transition">删除连接</button>
+            <button @click="showEdgeModal = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue
+
+    createApp({
+      setup() {
+        const nodes = ref([])
+        const edges = ref([])
+        const selectedNode = ref(null)
+        const selectedEdge = ref(null)
+        const showConfigModal = ref(false)
+        const showEdgeModal = ref(false)
+        const configNode = ref(null)
+        const pendingEdge = ref(null)
+        const pendingEdgeLabel = ref('')
+        const edgeSource = ref('')
+        const edgeTarget = ref('')
+        const saving = ref(false)
+        const chainName = ref('')
+        const chainDescription = ref('')
+        const chainEnabled = ref(true)
+        const currentChain = ref(null)
+        const ruleChains = ref([])
+        const canvasContainer = ref(null)
+        const isDragging = ref(false)
+        const dragNode = ref(null)
+        const dragOffset = ref({ x: 0, y: 0 })
+
+        const nodePalette = [
+          { type: 'trigger', label: '触发器', icon: '⚡', iconColor: 'text-yellow-400' },
+          { type: 'condition', label: '条件判断', icon: '🔍', iconColor: 'text-blue-400' },
+          { type: 'detector', label: '检测器', icon: '🛡️', iconColor: 'text-green-400' },
+          { type: 'filter', label: '过滤器', icon: '🔽', iconColor: 'text-orange-400' },
+          { type: 'action', label: '执行动作', icon: '⚙️', iconColor: 'text-purple-400' },
+          { type: 'notifier', label: '通知', icon: '📢', iconColor: 'text-red-400' },
+          { type: 'scorer', label: '评分', icon: '📊', iconColor: 'text-cyan-400' },
+        ]
+
+        let nodeIdCounter = 1
+
+        function generateNodeId() {
+          return 'node_' + (nodeIdCounter++)
+        }
+
+        function getNodeIcon(type) {
+          const item = nodePalette.find(n => n.type === type)
+          return item ? item.icon : '📦'
+        }
+
+        function getNodeColor(type) {
+          const item = nodePalette.find(n => n.type === type)
+          return item ? item.iconColor : 'text-gray-400'
+        }
+
+        function getNodeTypeLabel(type) {
+          const item = nodePalette.find(n => n.type === type)
+          return item ? item.label : type
+        }
+
+        function getNodeLabel(nodeId) {
+          const node = nodes.value.find(n => n.id === nodeId)
+          return node ? node.label : nodeId
+        }
+
+        async function fetchRuleChains() {
+          try {
+            const chains = await window.ApiService.getRuleChains()
+            ruleChains.value = chains
+          } catch (error) {
+            console.error('Failed to fetch rule chains:', error)
+          }
+        }
+
+        function loadChain(chain) {
+          currentChain.value = chain
+          chainName.value = chain.name
+          chainDescription.value = chain.description || ''
+          chainEnabled.value = chain.enabled
+          nodes.value = chain.chain_config.nodes || []
+          edges.value = chain.chain_config.edges || []
+        }
+
+        function createNewChain() {
+          currentChain.value = null
+          chainName.value = ''
+          chainDescription.value = ''
+          chainEnabled.value = true
+          nodes.value = []
+          edges.value = []
+        }
+
+        function clearCanvas() {
+          nodes.value = []
+          edges.value = []
+        }
+
+        async function saveChain() {
+          if (!chainName.value.trim()) {
+            alert('请输入规则链名称')
+            return
+          }
+
+          saving.value = true
+          try {
+            const chainData = {
+              name: chainName.value,
+              description: chainDescription.value,
+              enabled: chainEnabled.value,
+              nodes: nodes.value,
+              edges: edges.value
+            }
+
+            if (currentChain.value) {
+              await window.ApiService.updateRuleChain(currentChain.value.id, chainData)
+            } else {
+              await window.ApiService.createRuleChain(chainData)
+            }
+
+            await fetchRuleChains()
+            alert('保存成功')
+          } catch (error) {
+            console.error('Failed to save chain:', error)
+            alert('保存失败: ' + error.message)
+          } finally {
+            saving.value = false
+          }
+        }
+
+        function onDragStart(event, item) {
+          event.dataTransfer.setData('nodeType', item.type)
+          event.dataTransfer.setData('nodeLabel', item.label)
+        }
+
+        function onDrop(event) {
+          const type = event.dataTransfer.getData('nodeType')
+          const label = event.dataTransfer.getData('nodeLabel')
+          
+          if (!type) return
+
+          const rect = canvasContainer.value.getBoundingClientRect()
+          const x = event.clientX - rect.left - 75
+          const y = event.clientY - rect.top - 30
+
+          const newNode = {
+            id: generateNodeId(),
+            type: type,
+            label: label,
+            position: { x: Math.max(0, x), y: Math.max(0, y) },
+            config: getDefaultConfig(type)
+          }
+
+          nodes.value.push(newNode)
+        }
+
+        function getDefaultConfig(type) {
+          switch (type) {
+            case 'condition':
+              return { field: '', operator: 'equals', value: '' }
+            case 'action':
+              return { actionType: 'set_severity', actionValue: '' }
+            case 'filter':
+              return { expression: '' }
+            case 'detector':
+              return { detectorType: 'flash_loan' }
+            default:
+              return {}
+          }
+        }
+
+        function onNodeClick(node) {
+          selectedNode.value = node
+        }
+
+        function onNodeMouseDown(event, node) {
+          if (event.target.tagName === 'BUTTON') return
+          
+          isDragging.value = true
+          dragNode.value = node
+          selectedNode.value = node
+          
+          const rect = event.target.closest('.node-card').getBoundingClientRect()
+          dragOffset.value = {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top
+          }
+
+          const onMouseMove = (e) => {
+            if (!isDragging.value || !dragNode.value) return
+            
+            const canvasRect = canvasContainer.value.getBoundingClientRect()
+            const newX = e.clientX - canvasRect.left - dragOffset.value.x
+            const newY = e.clientY - canvasRect.top - dragOffset.value.y
+            
+            dragNode.value.position = {
+              x: Math.max(0, newX),
+              y: Math.max(0, newY)
+            }
+          }
+
+          const onMouseUp = () => {
+            isDragging.value = false
+            dragNode.value = null
+            document.removeEventListener('mousemove', onMouseMove)
+            document.removeEventListener('mouseup', onMouseUp)
+          }
+
+          document.addEventListener('mousemove', onMouseMove)
+          document.addEventListener('mouseup', onMouseUp)
+        }
+
+        function onCanvasClick() {
+          selectedNode.value = null
+        }
+
+        function deleteNode(nodeId) {
+          nodes.value = nodes.value.filter(n => n.id !== nodeId)
+          edges.value = edges.value.filter(e => e.source !== nodeId && e.target !== nodeId)
+          if (selectedNode.value && selectedNode.value.id === nodeId) {
+            selectedNode.value = null
+          }
+        }
+
+        function onEdgeClick(edge) {
+          selectedEdge.value = edge
+          edgeSource.value = edge.source
+          edgeTarget.value = edge.target
+          pendingEdgeLabel.value = edge.label || ''
+          showEdgeModal.value = true
+        }
+
+        function deleteEdge() {
+          edges.value = edges.value.filter(e => e.id !== selectedEdge.value?.id)
+          showEdgeModal.value = false
+        }
+
+        function getEdgePath(edge) {
+          const sourceNode = nodes.value.find(n => n.id === edge.source)
+          const targetNode = nodes.value.find(n => n.id === edge.target)
+          
+          if (!sourceNode || !targetNode) return ''
+
+          const sx = sourceNode.position.x + 75
+          const sy = sourceNode.position.y + 50
+          const tx = targetNode.position.x + 75
+          const ty = targetNode.position.y
+
+          const midY = (sy + ty) / 2
+          return `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`
+        }
+
+        function openConfigModal(node) {
+          configNode.value = JSON.parse(JSON.stringify(node))
+          showConfigModal.value = true
+        }
+
+        function applyNodeConfig() {
+          const index = nodes.value.findIndex(n => n.id === configNode.value.id)
+          if (index !== -1) {
+            nodes.value[index] = { ...configNode.value }
+          }
+          showConfigModal.value = false
+        }
+
+        onMounted(() => {
+          fetchRuleChains()
+        })
+
+        return {
+          nodes,
+          edges,
+          selectedNode,
+          selectedEdge,
+          showConfigModal,
+          showEdgeModal,
+          configNode,
+          pendingEdge,
+          pendingEdgeLabel,
+          edgeSource,
+          edgeTarget,
+          saving,
+          chainName,
+          chainDescription,
+          chainEnabled,
+          currentChain,
+          ruleChains,
+          canvasContainer,
+          nodePalette,
+          onDragStart,
+          onDrop,
+          onNodeClick,
+          onNodeMouseDown,
+          onCanvasClick,
+          deleteNode,
+          onEdgeClick,
+          deleteEdge,
+          getEdgePath,
+          getNodeIcon,
+          getNodeColor,
+          getNodeTypeLabel,
+          getNodeLabel,
+          openConfigModal,
+          applyNodeConfig,
+          fetchRuleChains,
+          loadChain,
+          createNewChain,
+          clearCanvas,
+          saveChain
+        }
+      }
+    }).mount('#app')
+  </script>
+</body>
+</html>

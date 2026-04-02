@@ -37,8 +37,20 @@ class ContractAddressDB(Base):
     entity_id = Column(String,nullable=True)
     entity_type = Column(String,nullable=True)
     entity_name = Column(String,nullable=True)
-    labels = Column(Text,nullable=True)  # 存储为JSON字符串
+    labels = Column(Text,nullable=True)
     address_create_time = Column(DateTime, nullable=True)
+
+
+class RuleChainDB(Base):
+    __tablename__ = "rule_chains"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    chain_config = Column(Text, nullable=False)
+    enabled = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 engine = create_engine(

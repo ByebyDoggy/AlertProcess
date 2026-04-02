@@ -118,3 +118,8 @@ Thumbs.db
 # Project specific
 alerts.db
 *.log
+
+# Node.js
+node_modules/
+frontend/node_modules/
+npm-requirements.txt

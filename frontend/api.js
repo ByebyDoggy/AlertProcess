@@ -53,6 +53,26 @@ const api = {
 
   async healthCheck() {
     return this.request('GET', '/')
+  },
+
+  async getRuleChains() {
+    return this.request('GET', '/rule-chain/')
+  },
+
+  async getRuleChain(chainId) {
+    return this.request('GET', `/rule-chain/${chainId}`)
+  },
+
+  async createRuleChain(chainData) {
+    return this.request('POST', '/rule-chain/', chainData)
+  },
+
+  async updateRuleChain(chainId, chainData) {
+    return this.request('PUT', `/rule-chain/${chainId}`, chainData)
+  },
+
+  async deleteRuleChain(chainId) {
+    return this.request('DELETE', `/rule-chain/${chainId}`)
   }
 }
 
