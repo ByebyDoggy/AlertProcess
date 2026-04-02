@@ -10,6 +10,17 @@ from rules.engine import (
     RuleRegistry,
     RuleEngine,
 )
+from rules.chain_engine import (
+    NodeType,
+    ChainNode,
+    ChainEdge,
+    ChainConfig,
+    NodeResult,
+    ChainResult,
+    ChainParser,
+    ChainExecutor,
+    ChainRegistry,
+)
 
 __all__ = [
     'Rule',
@@ -22,4 +33,13 @@ __all__ = [
     'ConditionOperator',
     'RuleRegistry',
     'RuleEngine',
+    'NodeType',
+    'ChainNode',
+    'ChainEdge',
+    'ChainConfig',
+    'NodeResult',
+    'ChainResult',
+    'ChainParser',
+    'ChainExecutor',
+    'ChainRegistry',
 ]

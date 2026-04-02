@@ -20,13 +20,13 @@
       transform: scale(1.02);
     }
     .node-card.selected {
-      ring: 2px;
-      ring-color: #3b82f6;
+      box-shadow: 0 0 0 3px #3b82f6;
     }
     .edge-line {
       stroke: #6366f1;
       stroke-width: 2;
       fill: none;
+      cursor: pointer;
     }
     .edge-line:hover {
       stroke: #818cf8;
@@ -45,6 +45,30 @@
     .modal-overlay {
       backdrop-filter: blur(4px);
     }
+    .connection-point {
+      width: 12px;
+      height: 12px;
+      background: #3b82f6;
+      border: 2px solid white;
+      border-radius: 50%;
+      position: absolute;
+      cursor: crosshair;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .node-card:hover .connection-point {
+      opacity: 1;
+    }
+    .connection-point:hover {
+      transform: scale(1.3);
+      background: #60a5fa;
+    }
+    .temp-edge {
+      stroke: #3b82f6;
+      stroke-width: 2;
+      stroke-dasharray: 5,5;
+      fill: none;
+    }
   </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen">
@@ -58,7 +82,8 @@
           </div>
           <nav class="flex gap-4">
             <a href="./index.html" class="text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-700 transition">告警仪表盘</a>
-            <span class="text-blue-400 px-3 py-2 rounded-lg bg-gray-700">规则链配置</span>
+            <a href="./rule-chain-new.html" class="text-blue-400 px-3 py-2 rounded-lg bg-gray-700">规则链配置（新版）</a>
+            <span class="text-gray-400 px-3 py-2 rounded-lg bg-gray-600">规则链配置（旧版）</span>
           </nav>
         </div>
         <button @click="saveChain" :disabled="saving" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg text-white font-medium transition">
@@ -68,7 +93,7 @@
     </header>
 
     <div class="flex h-[calc(100vh-80px)]">
-      <div class="w-64 bg-gray-800 border-r border-gray-700 p-4 overflow-y-auto">
+      <div class="w-72 bg-gray-800 border-r border-gray-700 p-4 overflow-y-auto">
         <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">节点组件</h3>
         <div class="space-y-2">
           <div v-for="item in nodePalette" :key="item.type" 
@@ -76,7 +101,10 @@
                draggable="true" @dragstart="onDragStart($event, item)">
             <div class="flex items-center gap-2">
               <span :class="item.iconColor" class="text-lg">{{ item.icon }}</span>
-              <span class="text-sm text-gray-200">{{ item.label }}</span>
+              <div>
+                <span class="text-sm text-gray-200">{{ item.label }}</span>
+                <div class="text-xs text-gray-400">{{ item.description }}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -90,12 +118,25 @@
             <div class="text-sm text-gray-200">{{ chain.name }}</div>
             <div class="text-xs text-gray-400 mt-1">{{ chain.enabled ? '已启用' : '已禁用' }}</div>
           </div>
+          <div v-if="ruleChains.length === 0" class="text-xs text-gray-500 text-center py-2">
+            暂无规则链
+          </div>
+        </div>
+
+        <div class="mt-6 p-3 bg-gray-700 rounded-lg border border-gray-600">
+          <h4 class="text-xs text-gray-300 mb-2">💡 使用说明</h4>
+          <ul class="text-xs text-gray-400 space-y-1">
+            <li>• 拖拽节点到画布</li>
+            <li>• 点击节点进行配置</li>
+            <li>• 拖拽节点边缘的圆点进行连线</li>
+            <li>• 双击连线删除连接</li>
+          </ul>
         </div>
       </div>
 
       <div class="flex-1 flex flex-col">
         <div class="p-4 border-b border-gray-700 flex items-center justify-between bg-gray-800">
-          <div class="flex items-center gap-4">
+          <div class="flex items-center gap-4 flex-wrap">
             <input v-model="chainName" placeholder="规则链名称..." 
                    class="bg-gray-700 text-white px-4 py-2 rounded-lg w-64 border border-gray-600 focus:border-blue-500 focus:outline-none">
             <input v-model="chainDescription" placeholder="描述（可选）..." 
@@ -112,31 +153,48 @@
         </div>
 
         <div class="flex-1 canvas-area relative overflow-hidden" ref="canvasContainer"
-             @drop="onDrop" @dragover.prevent @click="onCanvasClick">
+             @drop="onDrop" @dragover.prevent @click="onCanvasClick" @mousemove="onCanvasMouseMove" @mouseup="onCanvasMouseUp">
           <svg class="absolute inset-0 w-full h-full pointer-events-none" style="z-index: 0;">
             <defs>
               <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
                 <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1"/>
               </marker>
             </defs>
-            <g v-for="edge in edges" :key="edge.id">
-              <path :d="getEdgePath(edge)" class="edge-line" marker-end="url(#arrowhead)"
-                    @click.stop="onEdgeClick(edge)"/>
+            <g v-for="edge in edges" :key="edge.id" @click="onEdgeClick(edge)" class="pointer-events-auto">
+              <path :d="getEdgePath(edge)" class="edge-line" marker-end="url(#arrowhead)"/>
             </g>
+            <path v-if="tempEdge" :d="tempEdge.path" class="temp-edge" pointer-events="none"/>
           </svg>
           
           <div v-for="node in nodes" :key="node.id"
-               :class="{'ring-2 ring-blue-500': selectedNode && selectedNode.id === node.id}"
-               class="node-card absolute bg-gray-800 rounded-xl p-4 border border-gray-600 shadow-lg"
-               :style="{ left: node.position.x + 'px', top: node.position.y + 'px', zIndex: selectedNode && selectedNode.id === node.id ? 10 : 1 }"
+               :class="{'selected': selectedNode && selectedNode.id === node.id}"
+               class="node-card absolute bg-gray-800 rounded-xl p-4 border border-gray-600 shadow-lg min-w-[180px]"
+               :style="{ left: node.position.x + 'px', top: node.position.y + 'px' }"
                @mousedown="onNodeMouseDown($event, node)"
-               @click.stop="onNodeClick(node)">
+               @click.stop="onNodeClick(node)"
+               @dblclick.stop="openConfigModal(node)">
+            <!-- 顶部连接点 -->
+            <div class="connection-point" style="top: -6px; left: 50%; transform: translateX(-50%);" 
+                 @mousedown.stop="onConnectionPointStart($event, node, 'top')"></div>
+            <!-- 底部连接点 -->
+            <div class="connection-point" style="bottom: -6px; left: 50%; transform: translateX(-50%);" 
+                 @mousedown.stop="onConnectionPointStart($event, node, 'bottom')"></div>
+            <!-- 左侧连接点 -->
+            <div class="connection-point" style="left: -6px; top: 50%; transform: translateY(-50%);" 
+                 @mousedown.stop="onConnectionPointStart($event, node, 'left')"></div>
+            <!-- 右侧连接点 -->
+            <div class="connection-point" style="right: -6px; top: 50%; transform: translateY(-50%);" 
+                 @mousedown.stop="onConnectionPointStart($event, node, 'right')"></div>
+            
             <div class="flex items-center gap-2 mb-2">
               <span :class="getNodeColor(node.type)" class="text-xl">{{ getNodeIcon(node.type) }}</span>
-              <span class="font-medium text-white">{{ node.label }}</span>
+              <span class="font-medium text-white text-sm">{{ node.label }}</span>
             </div>
             <div class="text-xs text-gray-400">
               {{ getNodeTypeLabel(node.type) }}
+            </div>
+            <div v-if="node.config" class="text-xs text-blue-400 mt-1 truncate">
+              {{ getConfigSummary(node) }}
             </div>
             <button @click.stop="deleteNode(node.id)" 
                     class="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-600 rounded-full text-white text-sm flex items-center justify-center">×</button>
@@ -156,7 +214,7 @@
       <div class="bg-gray-800 rounded-xl p-6 w-full max-w-lg mx-4 border border-gray-700">
         <div class="flex justify-between items-center mb-4">
           <h3 class="text-xl font-bold text-white">配置节点</h3>
-          <button @click="showConfigModal = false" class="text-gray-400 hover:text-white">×</button>
+          <button @click="showConfigModal = false" class="text-gray-400 hover:text-white text-2xl">&times;</button>
         </div>
         
         <div v-if="configNode" class="space-y-4">
@@ -195,7 +253,7 @@
             </select>
             
             <label class="block text-sm font-medium text-gray-300 mb-1 mt-3">参数值</label>
-            <input v-model="configNode.config.actionValue" placeholder="参数值"
+            <input v-model="configNode.config.actionValue" placeholder="例如: CRITICAL 或 HIGH"
                    class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
           </div>
           
@@ -204,18 +262,49 @@
             <textarea v-model="configNode.config.expression" placeholder="例如: context.gas_price > 100"
                       rows="3"
                       class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none"></textarea>
+            <div class="text-xs text-gray-500 mt-1">支持条件表达式，如: detector.flash_loan && risk_score > 300</div>
           </div>
           
           <div v-if="configNode.type === 'detector'">
             <label class="block text-sm font-medium text-gray-300 mb-1">检测器类型</label>
             <select v-model="configNode.config.detectorType" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
-              <option value="flash_loan">Flash Loan 检测</option>
-              <option value="token_approval">Token 授权检测</option>
-              <option value="token_anomaly">Token 异常检测</option>
-              <option value="address_graph">地址图谱分析</option>
-              <option value="gas_price">Gas 价格检测</option>
-              <option value="address_age">地址年龄检测</option>
+              <option value="flash_loan">⚡ Flash Loan 检测</option>
+              <option value="token_approval">🔐 Token 授权检测</option>
+              <option value="token_anomaly">💰 Token 异常检测</option>
+              <option value="address_graph">🔗 地址图谱分析</option>
+              <option value="gas_price">⛽ Gas 价格检测</option>
+              <option value="address_age">📅 地址年龄检测</option>
+              <option value="arkm_label">🏷️ ARKM 标签检测</option>
+              <option value="address_type">🏢 地址类型检测</option>
             </select>
+            <div class="text-xs text-gray-500 mt-1">选择该节点要使用的检测器类型</div>
+          </div>
+
+          <div v-if="configNode.type === 'notifier'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">通知类型</label>
+            <select v-model="configNode.config.notifierType" class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+              <option value="webhook">Webhook 通知</option>
+              <option value="email">邮件通知</option>
+              <option value="slack">Slack 通知</option>
+            </select>
+            
+            <label class="block text-sm font-medium text-gray-300 mb-1 mt-3">目标地址</label>
+            <input v-model="configNode.config.targetUrl" placeholder="例如: https://example.com/webhook"
+                   class="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-blue-500 focus:outline-none">
+          </div>
+
+          <div v-if="configNode.type === 'scorer'">
+            <label class="block text-sm font-medium text-gray-300 mb-1">评分权重</label>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-xs text-gray-400">严重程度权重</label>
+                <input type="number" v-model="configNode.config.weights.severity" class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 mt-1">
+              </div>
+              <div>
+                <label class="text-xs text-gray-400">检测器权重</label>
+                <input type="number" v-model="configNode.config.weights.detector" class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 mt-1">
+              </div>
+            </div>
           </div>
           
           <div class="flex justify-end gap-3 mt-6">
@@ -230,7 +319,7 @@
       <div class="bg-gray-800 rounded-xl p-6 w-full max-w-md mx-4 border border-gray-700">
         <div class="flex justify-between items-center mb-4">
           <h3 class="text-xl font-bold text-white">连接设置</h3>
-          <button @click="showEdgeModal = false" class="text-gray-400 hover:text-white">×</button>
+          <button @click="showEdgeModal = false" class="text-gray-400 hover:text-white text-2xl">&times;</button>
         </div>
         
         <div class="space-y-4">
@@ -284,21 +373,29 @@
         const isDragging = ref(false)
         const dragNode = ref(null)
         const dragOffset = ref({ x: 0, y: 0 })
+        const isConnecting = ref(false)
+        const connectionStart = ref(null)
+        const tempEdge = ref(null)
 
         const nodePalette = [
-          { type: 'trigger', label: '触发器', icon: '⚡', iconColor: 'text-yellow-400' },
-          { type: 'condition', label: '条件判断', icon: '🔍', iconColor: 'text-blue-400' },
-          { type: 'detector', label: '检测器', icon: '🛡️', iconColor: 'text-green-400' },
-          { type: 'filter', label: '过滤器', icon: '🔽', iconColor: 'text-orange-400' },
-          { type: 'action', label: '执行动作', icon: '⚙️', iconColor: 'text-purple-400' },
-          { type: 'notifier', label: '通知', icon: '📢', iconColor: 'text-red-400' },
-          { type: 'scorer', label: '评分', icon: '📊', iconColor: 'text-cyan-400' },
+          { type: 'trigger', label: '触发器', icon: '⚡', iconColor: 'text-yellow-400', description: '规则链的起始节点' },
+          { type: 'condition', label: '条件判断', icon: '🔍', iconColor: 'text-blue-400', description: '根据条件分支' },
+          { type: 'detector', label: '检测器', icon: '🛡️', iconColor: 'text-green-400', description: '执行安全检测' },
+          { type: 'filter', label: '过滤器', icon: '🔽', iconColor: 'text-orange-400', description: '过滤不符合条件的告警' },
+          { type: 'action', label: '执行动作', icon: '⚙️', iconColor: 'text-purple-400', description: '设置属性或标记' },
+          { type: 'notifier', label: '通知', icon: '📢', iconColor: 'text-red-400', description: '发送告警通知' },
+          { type: 'scorer', label: '评分', icon: '📊', iconColor: 'text-cyan-400', description: '计算风险评分' },
         ]
 
         let nodeIdCounter = 1
+        let edgeIdCounter = 1
 
         function generateNodeId() {
           return 'node_' + (nodeIdCounter++)
+        }
+
+        function generateEdgeId() {
+          return 'edge_' + (edgeIdCounter++)
         }
 
         function getNodeIcon(type) {
@@ -319,6 +416,37 @@
         function getNodeLabel(nodeId) {
           const node = nodes.value.find(n => n.id === nodeId)
           return node ? node.label : nodeId
+        }
+
+        function getConfigSummary(node) {
+          if (!node.config) return '未配置'
+          
+          switch (node.type) {
+            case 'detector':
+              const typeMap = {
+                'flash_loan': '闪电贷',
+                'token_approval': 'Token授权',
+                'token_anomaly': 'Token异常',
+                'address_graph': '地址图谱',
+                'gas_price': 'Gas价格',
+                'address_age': '地址年龄',
+                'arkm_label': 'ARKM标签',
+                'address_type': '地址类型'
+              }
+              return typeMap[node.config.detectorType] || node.config.detectorType
+            case 'condition':
+              return `${node.config.field} ${node.config.operator} ${node.config.value}`
+            case 'action':
+              return `${node.config.actionType}: ${node.config.actionValue}`
+            case 'filter':
+              return node.config.expression || '未设置'
+            case 'notifier':
+              return `${node.config.notifierType}: ${node.config.targetUrl}`
+            case 'scorer':
+              return `严重程度:${node.config.weights?.severity || 1}, 检测器:${node.config.weights?.detector || 1}`
+            default:
+              return '已配置'
+          }
         }
 
         async function fetchRuleChains() {
@@ -397,7 +525,7 @@
           if (!type) return
 
           const rect = canvasContainer.value.getBoundingClientRect()
-          const x = event.clientX - rect.left - 75
+          const x = event.clientX - rect.left - 90
           const y = event.clientY - rect.top - 30
 
           const newNode = {
@@ -421,6 +549,10 @@
               return { expression: '' }
             case 'detector':
               return { detectorType: 'flash_loan' }
+            case 'notifier':
+              return { notifierType: 'webhook', targetUrl: '' }
+            case 'scorer':
+              return { weights: { severity: 1, detector: 1 } }
             default:
               return {}
           }
@@ -471,6 +603,80 @@
           selectedNode.value = null
         }
 
+        function onCanvasMouseMove(event) {
+          if (!isConnecting.value || !connectionStart.value) return
+
+          const rect = canvasContainer.value.getBoundingClientRect()
+          const mouseX = event.clientX - rect.left
+          const mouseY = event.clientY - rect.top
+
+          const startNode = nodes.value.find(n => n.id === connectionStart.value.nodeId)
+          if (!startNode) return
+
+          const startPos = getConnectionPointPosition(startNode, connectionStart.value.position)
+          tempEdge.value = {
+            path: `M ${startPos.x} ${startPos.y} L ${mouseX} ${mouseY}`
+          }
+        }
+
+        function onCanvasMouseUp() {
+          if (isConnecting.value) {
+            isConnecting.value = false
+            connectionStart.value = null
+            tempEdge.value = null
+          }
+        }
+
+        function onConnectionPointStart(event, node, position) {
+          event.preventDefault()
+          isConnecting.value = true
+          connectionStart.value = { nodeId: node.id, position }
+          tempEdge.value = null
+        }
+
+        function getConnectionPointPosition(node, position) {
+          const rect = { width: 180, height: 60 }
+          let x = node.position.x
+          let y = node.position.y
+
+          switch (position) {
+            case 'top':
+              x += rect.width / 2
+              break
+            case 'bottom':
+              x += rect.width / 2
+              y += rect.height
+              break
+            case 'left':
+              y += rect.height / 2
+              break
+            case 'right':
+              x += rect.width
+              y += rect.height / 2
+              break
+          }
+
+          return { x, y }
+        }
+
+        function finishConnection(targetNode) {
+          if (!connectionStart.value || connectionStart.value.nodeId === targetNode.id) return
+
+          const startNodeId = connectionStart.value.nodeId
+          
+          const edge = {
+            id: generateEdgeId(),
+            source: startNodeId,
+            target: targetNode.id,
+            label: ''
+          }
+
+          edges.value.push(edge)
+          isConnecting.value = false
+          connectionStart.value = null
+          tempEdge.value = null
+        }
+
         function deleteNode(nodeId) {
           nodes.value = nodes.value.filter(n => n.id !== nodeId)
           edges.value = edges.value.filter(e => e.source !== nodeId && e.target !== nodeId)
@@ -498,9 +704,9 @@
           
           if (!sourceNode || !targetNode) return ''
 
-          const sx = sourceNode.position.x + 75
-          const sy = sourceNode.position.y + 50
-          const tx = targetNode.position.x + 75
+          const sx = sourceNode.position.x + 90
+          const sy = sourceNode.position.y + 30
+          const tx = targetNode.position.x + 90
           const ty = targetNode.position.y
 
           const midY = (sy + ty) / 2
@@ -522,6 +728,25 @@
 
         onMounted(() => {
           fetchRuleChains()
+          
+          document.addEventListener('mouseup', (e) => {
+            if (isConnecting.value) {
+              const target = e.target.closest('.node-card')
+              if (target) {
+                const nodeId = target.__vueParentComponent?.props?.node?.id || 
+                               Array.from(nodes.value).find(n => 
+                                 n.position.x === parseInt(target.style.left) &&
+                                 n.position.y === parseInt(target.style.top)
+                               )?.id
+                if (nodeId) {
+                  const node = nodes.value.find(n => n.id === nodeId)
+                  if (node) {
+                    finishConnection(node)
+                  }
+                }
+              }
+            }
+          })
         })
 
         return {
@@ -544,11 +769,15 @@
           ruleChains,
           canvasContainer,
           nodePalette,
+          tempEdge,
           onDragStart,
           onDrop,
           onNodeClick,
           onNodeMouseDown,
           onCanvasClick,
+          onCanvasMouseMove,
+          onCanvasMouseUp,
+          onConnectionPointStart,
           deleteNode,
           onEdgeClick,
           deleteEdge,
@@ -557,6 +786,7 @@
           getNodeColor,
           getNodeTypeLabel,
           getNodeLabel,
+          getConfigSummary,
           openConfigModal,
           applyNodeConfig,
           fetchRuleChains,

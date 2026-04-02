@@ -22,8 +22,9 @@ from detectors.implementations.address_graph_detector import AddressGraphDetecto
 from data_providers.context_builder import TransactionContextBuilder
 from scoring.engine import ScoringEngine, ScoringConfig, DefaultScoringConfig
 from rules.engine import RuleEngine, Rule, RuleConfig
+from rules.chain_engine import ChainExecutor, ChainConfig, ChainNode, ChainEdge
 from models import FinalAlert, SeverityEnum as ModelSeverityEnum
-from database.models import SeverityEnum
+from database.models import SeverityEnum, RuleChainDB
 
 
 alertRouter = APIRouter(
@@ -113,7 +114,34 @@ class AlertProcessingPipeline:
     def _init_rule_engine(self):
         """Initialize rule engine"""
         self.rule_engine = RuleEngine()
-    
+
+    def _load_enabled_chains(self) -> list[tuple[str, ChainExecutor]]:
+        """Load all enabled rule chains from DB"""
+        chains = []
+        db = SessionLocal()
+        try:
+            db_chains = db.query(RuleChainDB).filter(RuleChainDB.enabled == 1).all()
+            for db_chain in db_chains:
+                try:
+                    import json
+                    config = json.loads(db_chain.chain_config) if isinstance(db_chain.chain_config, str) else db_chain.chain_config
+                    chain_nodes = [ChainNode(**n) for n in config.get("nodes", [])]
+                    chain_edges = [ChainEdge(**e) for e in config.get("edges", [])]
+                    chain_config = ChainConfig(
+                        name=db_chain.name,
+                        description=db_chain.description or "",
+                        enabled=True,
+                        nodes=chain_nodes,
+                        edges=chain_edges,
+                    )
+                    executor = ChainExecutor(chain_config)
+                    chains.append((db_chain.id, executor))
+                except Exception:
+                    pass
+        finally:
+            db.close()
+        return chains
+
     async def process(self, alert: AlertInput) -> FinalAlert:
         """Execute full detection pipeline"""
         alert_id = str(uuid.uuid4())
@@ -134,6 +162,32 @@ class AlertProcessingPipeline:
         
         matched_rules = [r.rule_name for r in rule_results if r.matched]
         
+        # Execute enabled rule chains
+        chain_results = []
+        enabled_chains = self._load_enabled_chains()
+        chain_severity = None
+        chain_score = 0.0
+        chain_tags = []
+        for chain_id, executor in enabled_chains:
+            try:
+                chain_result = await executor.execute(alert, context)
+                if chain_result.success:
+                    chain_results.append({
+                        "chain_id": chain_id,
+                        "chain_name": chain_result.chain_name,
+                        "severity": chain_result.severity,
+                        "score": chain_result.score,
+                        "tags": chain_result.tags,
+                        "path": chain_result.path,
+                    })
+                    if chain_result.severity:
+                        chain_severity = chain_result.severity
+                    if chain_result.score > chain_score:
+                        chain_score = chain_result.score
+                    chain_tags.extend(t for t in chain_result.tags if t not in chain_tags)
+            except Exception:
+                pass
+        
         severity = scoring_result.severity
         
         final_alert = FinalAlert(
@@ -149,6 +203,10 @@ class AlertProcessingPipeline:
             metadata={
                 "scoring_details": scoring_result.dimension_scores,
                 "rule_results": [r.model_dump() for r in rule_results],
+                "chain_results": chain_results,
+                "chain_severity": chain_severity,
+                "chain_score": chain_score,
+                "chain_tags": chain_tags,
             }
         )
         

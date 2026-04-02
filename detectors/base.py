@@ -105,6 +105,24 @@ class Detector(ABC):
         return result
 
 
+def _python_type_to_json_type(annotation) -> str:
+    """Convert Python type annotation to JSON schema type string"""
+    origin = getattr(annotation, '__origin__', None)
+    if origin is dict:
+        return "object"
+    if origin is list:
+        return "array"
+    if annotation is bool:
+        return "boolean"
+    if annotation is int:
+        return "integer"
+    if annotation is float:
+        return "number"
+    if annotation is str:
+        return "string"
+    return "string"
+
+
 class DetectorRegistry:
     """
     Registry for managing and accessing detectors
@@ -163,3 +181,62 @@ class DetectorRegistry:
     def create_all(cls) -> list[Detector]:
         """Create instances of all registered detectors"""
         return [cls._detectors[name]() for name in cls._detectors]
+
+    @classmethod
+    def get_detector_info(cls, name: str) -> dict[str, Any] | None:
+        """
+        Get detailed info for a single detector, including:
+        - name: registry name (e.g. "flash_loan_detector")
+        - type_key: frontend-friendly key (e.g. "flash_loan")
+        - description: human-readable description
+        - config_schema: JSON Schema for configuration
+        - config_fields: detailed field list for form rendering
+        - default_config: default configuration values
+        """
+        if name not in cls._detectors:
+            return None
+        detector_class = cls._detectors[name]
+        instance = detector_class()
+        config_class = type(instance.config)
+
+        config_fields = []
+        default_config = instance.config.model_dump()
+
+        for field_name, field_info in config_class.model_fields.items():
+            if field_name in ('enabled', 'name'):
+                continue
+            field_default = default_config.get(field_name)
+            config_fields.append({
+                "key": field_name,
+                "type": _python_type_to_json_type(field_info.annotation),
+                "default": field_default,
+                "description": field_info.description or "",
+                "required": field_info.is_required(),
+            })
+
+        return {
+            "name": instance.name,
+            "type_key": instance.name.replace("_detector", ""),
+            "description": instance.description,
+            "config_schema": detector_class.get_config_schema(),
+            "config_fields": config_fields,
+            "default_config": {
+                k: v for k, v in default_config.items()
+                if k not in ('enabled', 'name')
+            },
+        }
+
+    @classmethod
+    def get_all_detector_info(cls) -> list[dict[str, Any]]:
+        """Get detailed info for all registered detectors"""
+        return [cls.get_detector_info(name) for name in cls._detectors]
+
+    @classmethod
+    def build_detector_type_map(cls) -> dict[str, str]:
+        """Build frontend type_key -> registry name mapping (e.g. flash_loan -> flash_loan_detector)"""
+        result = {}
+        for name in cls._detectors:
+            instance = cls._detectors[name]()
+            type_key = instance.name.replace("_detector", "")
+            result[type_key] = instance.name
+        return result
