@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 import uuid
 import json
 
 from database.models import SessionLocal, RuleChainDB
-from rules.chain_engine import ChainParser, ChainExecutor, ChainConfig, ChainNode, ChainEdge
-from detectors.base import DetectorRegistry
+from engine.parser import ChainParser
+from engine.validator import ChainValidator
+from nodes.base import NodeCategory, NodeRegistry
 
 
 ruleChainRouter = APIRouter(
@@ -28,7 +29,9 @@ class RuleNode(BaseModel):
 class RuleEdge(BaseModel):
     id: str
     source: str
+    source_port: str = "output"
     target: str
+    target_port: str = "input"
     label: str = ""
 
 
@@ -63,10 +66,19 @@ class ValidateRequest(BaseModel):
     edges: list
 
 
+class ValidateError(BaseModel):
+    type: str = "error"  # error | warning
+    message: str
+    node_id: Optional[str] = None
+    edge_id: Optional[str] = None
+
+
 class ValidateResponse(BaseModel):
     valid: bool
-    errors: list[str] = []
+    errors: list[ValidateError] = []
+    warnings: list[ValidateError] = []
     rule_tree: Optional[dict] = None
+    stats: Optional[dict] = None
 
 
 def get_db():
@@ -261,141 +273,101 @@ async def validate_chain(
         api_key: Optional[str] = None
 ):
     """
-    验证规则链配置是否合法, 并返回规则树描述
-    前端在保存前可先调用此接口做实时校验
+    验证规则链配置是否合法。
+    使用新引擎 ChainParser + ChainValidator 进行完整校验。
     """
-    chain_nodes = [ChainNode(**n) for n in data.nodes]
-    chain_edges = [ChainEdge(**e) for e in data.edges]
+    errors = []
+    warnings = []
 
-    config = ChainConfig(name="_validate", nodes=chain_nodes, edges=chain_edges)
-    parser = ChainParser(config)
+    if not data.nodes:
+        errors.append(ValidateError(type="error", message="规则链至少需要一个节点"))
+        return ValidateResponse(valid=False, errors=errors)
 
-    valid, errors = parser.validate()
-    rule_tree = parser.to_rule_config() if valid else None
+    # 使用新引擎解析和校验
+    raw_config = {"nodes": [dict(n) for n in data.nodes], "edges": [dict(e) for e in data.edges]}
+    parsed_chain = ChainParser.parse(raw_config)
+    validator = ChainValidator()
+    validation_errors = validator.validate(parsed_chain)
 
-    return ValidateResponse(valid=valid, errors=errors, rule_tree=rule_tree)
+    for ve in validation_errors:
+        target = errors if ve.level == "error" else warnings
+        target.append(ValidateError(
+            type=ve.level,
+            message=ve.message,
+            node_id=ve.node_id,
+            edge_id=ve.edge_id,
+        ))
+
+    # 统计信息
+    trigger_count = sum(
+        1 for n in data.nodes
+        if NodeRegistry.get(n.get("type", ""))
+        and NodeRegistry.get(n["type"]).category == NodeCategory.INPUT
+    )
+
+    stats = {
+        "node_count": len(data.nodes),
+        "edge_count": len(data.edges),
+        "trigger_count": trigger_count,
+        "is_reachable": len(errors) == 0,
+    }
+
+    return ValidateResponse(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+        rule_tree=None,
+        stats=stats,
+    )
 
 
 @ruleChainRouter.get("/schema/node-types")
 async def get_node_types():
-    """返回前端可用的节点类型及配置 schema (无需认证, 检测器列表动态从注册表获取)"""
-    detectors = DetectorRegistry.get_all_detector_info()
-
-    detector_options = [
-        {"value": d["type_key"], "label": d["description"]}
-        for d in detectors
-    ]
-
-    return {
-        "node_types": [
-            {
-                "label": "触发器",
-                "icon": "⚡",
-                "color": "yellow",
-                "description": "规则链入口",
-                "config_fields": []
-            },
-            {
-                "type": "detector",
-                "label": "检测器",
-                "icon": "🛡️",
-                "color": "green",
-                "description": "执行安全检测",
-                "config_fields": [
-                    {
-                        "key": "detectorType",
-                        "label": "检测器类型",
-                        "type": "select",
-                        "options": detector_options
-                    }
-                ]
-            },
-            {
-                "type": "condition",
-                "label": "条件判断",
-                "icon": "🔍",
-                "color": "blue",
-                "description": "根据条件分支",
-                "config_fields": [
-                    {"key": "field", "label": "条件字段", "type": "text", "placeholder": "detector.flash_loan_detector"},
-                    {"key": "operator", "label": "操作符", "type": "select",
-                     "options": [
-                        {"value": "equals", "label": "等于"},
-                        {"value": "not_equals", "label": "不等于"},
-                        {"value": "contains", "label": "包含"},
-                        {"value": "greater_than", "label": "大于"},
-                        {"value": "less_than", "label": "小于"},
-                    ]},
-                    {"key": "value", "label": "比较值", "type": "text"}
-                ]
-            },
-            {
-                "type": "filter",
-                "label": "过滤器",
-                "icon": "🔽",
-                "color": "orange",
-                "description": "过滤不符合条件的告警",
-                "config_fields": [
-                    {"key": "expression", "label": "过滤条件", "type": "text",
-                     "placeholder": "detector.flash_loan_detector"}
-                ]
-            },
-            {
-                "type": "action",
-                "label": "执行动作",
-                "icon": "⚙️",
-                "color": "purple",
-                "description": "设置属性或标记",
-                "config_fields": [
-                    {"key": "actionType", "label": "操作类型", "type": "select",
-                     "options": [
-                        {"value": "set_severity", "label": "设置严重级别"},
-                        {"value": "set_score", "label": "设置风险评分"},
-                        {"value": "add_tag", "label": "添加标签"},
-                    ]},
-                    {"key": "actionValue", "label": "参数值", "type": "text",
-                     "placeholder": "CRITICAL / 80 / suspicious"}
-                ]
-            },
-            {
-                "type": "scorer",
-                "label": "评分",
-                "icon": "📊",
-                "color": "cyan",
-                "description": "计算风险评分",
-                "config_fields": [
-                    {"key": "severity_weight", "label": "严重程度权重", "type": "number", "default": 1},
-                    {"key": "detector_weight", "label": "检测器权重", "type": "number", "default": 1},
-                ]
-            },
-            {
-                "type": "notifier",
-                "label": "通知",
-                "icon": "📢",
-                "color": "red",
-                "description": "发送告警通知",
-                "config_fields": [
-                    {"key": "notifierType", "label": "通知类型", "type": "select",
-                     "options": [
-                        {"value": "webhook", "label": "Webhook"},
-                        {"value": "telegram", "label": "Telegram"},
-                    ]},
-                    {"key": "targetUrl", "label": "目标地址", "type": "text",
-                     "placeholder": "https://example.com/webhook"}
-                ]
-            },
-        ]
-    }
+    """返回前端可用的节点类型及配置 schema (无需认证)"""
+    return NodeRegistry.get_schema_for_frontend()
 
 
 @ruleChainRouter.get("/schema/detectors")
 async def get_detectors():
     """
-    获取所有已注册检测器的详细信息, 包括配置参数 schema 和默认值。
-    前端可在用户选择检测器节点时调用此接口, 动态渲染对应的配置表单。
+    获取所有已注册检测器节点的详细信息, 包括配置参数 schema 和默认值。
     """
-    detectors = DetectorRegistry.get_all_detector_info()
+    detector_nodes = NodeRegistry.get_by_category(NodeCategory.DETECTION)
     return {
-        "detectors": detectors,
-        "type_map": DetectorRegistry.build_detector_type_map(),
+        "detectors": [
+            {
+                "name": cls.name,
+                "label": cls.label,
+                "description": cls.description,
+                "config_schema": cls.get_config_schema(),
+                "default_config": cls.get_default_config(),
+            }
+            for cls in detector_nodes
+        ],
+    }
+
+
+@ruleChainRouter.get("/schema/nodes")
+async def get_node_types():
+    """
+    返回新引擎 NodeRegistry 中所有已注册节点的完整 Schema 信息。
+    前端据此动态渲染节点面板、端口、配置表单。
+    """
+    return NodeRegistry.get_schema_for_frontend()
+
+
+@ruleChainRouter.get("/schema/connection-rules")
+async def get_connection_rules():
+    """
+    返回数据类型兼容性矩阵, 供前端连线校验使用。
+    """
+    from nodes.base import ALLOWED_TYPE_MAPPING, CATEGORY_ALLOWED_INPUTS, NodeCategory
+
+    return {
+        "allowed_type_mapping": {
+            src: list(targets) for src, targets in ALLOWED_TYPE_MAPPING.items()
+        },
+        "category_allowed_inputs": {
+            cat.value: list(inputs) for cat, inputs in CATEGORY_ALLOWED_INPUTS.items()
+        },
     }

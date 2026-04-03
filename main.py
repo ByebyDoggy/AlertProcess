@@ -6,6 +6,11 @@ from routers import alertRouter
 from routers.rule_chain.router import ruleChainRouter
 from config import settings
 import os
+import nodes
+from nodes.base import NodeRegistry
+
+# 初始化节点注册表
+nodes.init_registry()
 
 app = FastAPI(
     title="Alert Webhook Service",

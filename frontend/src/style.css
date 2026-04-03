@@ -196,6 +196,21 @@ body {
   pointer-events: none;
   opacity: 0.7;
 }
+.temp-edge-invalid {
+  stroke: #ef4444;
+  stroke-dasharray: 6, 4;
+  stroke-width: 2.5;
+}
+.edge-invalid {
+  stroke: #ef4444 !important;
+  stroke-dasharray: 6, 3;
+  opacity: 0.6;
+}
+
+/* Node ports container */
+.node-ports {
+  padding: 6px 0;
+}
 
 /* Edge label */
 .edge-label-bg {
