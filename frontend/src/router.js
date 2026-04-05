@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import RuleChainEditor from './views/RuleChainEditor.vue'
+import KnowledgeBase from './views/KnowledgeBase.vue'
 
 const routes = [
   {
@@ -10,6 +11,11 @@ const routes = [
     path: '/rule-chain',
     name: 'RuleChain',
     component: RuleChainEditor,
+  },
+  {
+    path: '/knowledge-base',
+    name: 'KnowledgeBase',
+    component: KnowledgeBase,
   },
 ]
 

@@ -43,7 +43,11 @@ class BaseAction(BaseNode):
         upstream = self._first_input(inputs)
         merged_context = self._merge_context(context, upstream)
 
-        result = await self.run(merged_context)
+        # Dry-run 模式：Action 节点仅模拟，不实际执行副作用
+        if context.get("__dry_run__"):
+            result = {"dry_run": True, "simulated": True, "action_type": self.name}
+        else:
+            result = await self.run(merged_context)
 
         return NodeOutput(
             node_id=self.node_id,

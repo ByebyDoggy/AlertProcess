@@ -57,6 +57,9 @@ class ExecutionContext:
     # 错误列表
     errors: list[str] = field(default_factory=list)
 
+    # Dry-run 模式（测试运行时为 True，Action 节点仅模拟不实际执行）
+    dry_run: bool = False
+
     def set_output(self, node_id: str, output: NodeOutput) -> None:
         """记录节点输出"""
         self.node_outputs[node_id] = output

@@ -28,6 +28,13 @@ export default defineConfig({
           if (req.url === '/rule-chain') return '/index.html'
         },
       },
+      '/knowledge-base': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        bypass(req) {
+          if (req.url === '/knowledge-base') return '/index.html'
+        },
+      },
     },
   },
   build: {

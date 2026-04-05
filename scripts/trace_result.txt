@@ -1,0 +1,159 @@
+======================================================================
+  TRANSACTION ANALYSIS: 0xc310a0affe2169d1f6feec1c63dbc7f7c62a887fa48795d327d4d2da2d6b111d
+======================================================================
+
+--- Basic Info ---
+  Status:    SUCCESS
+  Block:     #16817996
+  From:      0x5F259D0b76665c337c6104145894F4D1D2758B8c
+  To:        0xeBC29199C817Dc47BA12E3F86102564D640CBf99  EOA / ProxyContract (tx.to)
+  Value:     0 ETH
+  Gas Used:  1,949,994 / 10,000,000
+  Gas Price: 56.818948194 gwei
+  TxFee:     0.110796608064610836 ETH
+  Selector:  0x863df8af -> UNKNOWN (0x863df1ab likely fallback or proxy)
+
+--- Trace Summary ---
+  Total traces: 151
+
+--- ERC20 Transfer Analysis (20 events) ---
+  DAI:
+    Events: 7
+    Aave Variable Debt DAI -> EOA / ProxyContract (tx.to): 30,000,000,000,000,000,000,000,000
+    EOA / ProxyContract (tx.to) -> CREATE: Contract 1 (proxy delegate): 30,000,000,000,000,000,000,000,000
+    CREATE: Contract 1 (proxy delegate) -> 1inch V5 AggregationRouter V5 (Router): 20,000,000,000,000,000,000,000,000
+    CREATE: Contract 1 (proxy delegate) -> 1inch V5 AggregationRouter V5 (Router): 10,000,000,000,000,000,000,000,000
+    1inch V5 AggregationRouter V5 (Router) -> CREATE: Contract 2 (proxy delegate): 38,904,507,348,306,697,267,428,294
+    ... and 2 more
+    NET IN: 8,877,507,348,306,697,267,428,294 (in=68,904,507,348,306,697,267,428,294, out=60,027,000,000,000,000,000,000,000)
+  0xe025e3ca...:
+    Events: 6
+    0x00000000... -> CREATE: Contract 1 (proxy delegate): 19,568,124,398,774,981,141,467,060
+    0x00000000... -> CREATE: Contract 1 (proxy delegate): 195,681,243,987,749,811,414,670,603
+    0x00000000... -> CREATE: Contract 1 (proxy delegate): 195,681,243,987,749,811,414,670,603
+    CREATE: Contract 1 (proxy delegate) -> 0x00000000...: 100,000,000,000,000,000,000,000,000
+    CREATE: Contract 1 (proxy delegate) -> CREATE: Contract 2 (proxy delegate): 310,930,612,374,274,603,970,808,264
+    ... and 1 more
+    BALANCED: 0 (in=0, out=0)
+  1inch V5 LimitOrderProtocol:
+    Events: 6
+    0x00000000... -> CREATE: Contract 1 (proxy delegate): 200,000,000,000,000,000,000,000,000
+    CREATE: Contract 1 (proxy delegate) -> 0x00000000...: 10,000,000,000,000,000,000,000,000
+    0x00000000... -> CREATE: Contract 1 (proxy delegate): 200,000,000,000,000,000,000,000,000
+    CREATE: Contract 1 (proxy delegate) -> 0x00000000...: 254,234,370,990,601,202,559,999,999
+    0x00000000... -> CREATE: Contract 2 (proxy delegate): 254,234,370,990,601,202,559,999,999
+    ... and 1 more
+    BALANCED: 0 (in=0, out=0)
+  Aave Variable Debt DAI:
+    Events: 1
+    0x00000000... -> 0x464c71f6...: 37,049,690,136,868,391
+    BALANCED: 0 (in=0, out=0)
+
+--- Protocol Involvement ---
+
+  [Other]
+    EOA / ProxyContract (tx.to): 3,814,308 gas
+    CREATE: Contract 1 (proxy delegate): 706,385 gas
+    CREATE: Contract 2 (proxy delegate): 341,634 gas
+    DAI: 189,798 gas
+
+  [Lending]
+    Aave V3 Pool (old): 1,994,869 gas
+    Aave V3 Pool Configurator: 1,989,033 gas
+    Aave Variable Debt DAI: 74,341 gas
+    Aave aDAI Token (proxy): 68,008 gas
+    Aave V3 Pool (Incentives): 17,844 gas
+    Aave V3 Pool (InterestRate): 15,675 gas
+    Aave DAI (stableDebtToken): 15,654 gas
+    Aave V3 Pool (ValidationLogic): 12,113 gas
+    Aave V3 Pool (PriceOracle): 8,426 gas
+    Aave V3 Pool (Collection): 2,710 gas
+    Aave V3 EmissionManager: 2,559 gas
+    Aave V3 Pool (ConfigLogic): 2,486 gas
+
+  [DEX Aggregator]
+    1inch V5 AggregationRouter V5 (Router): 630,596 gas
+    1inch V5 AggregationExecutor (Una): 335,746 gas
+    1inch V5 SrcAggregator / FeeCharger: 244,131 gas
+    1inch V5 AggregationExecutor (UniswapV3): 237,637 gas
+    1inch V5 AggregationExecutor (Punk): 126,068 gas
+    1inch V5 LimitOrderProtocol: 52,936 gas
+    1inch V5 CHI Token (gas refund): 33,420 gas
+    1inch V5 AggregationExecutor (CurveV2): 33,277 gas
+    1inch V5 CHI GasToken: 16,960 gas
+    1inch V5 AggregationExecutor (UnoswapExecutor): 8,358 gas
+
+--- Call Tree (top-level + 2 levels) ---
+  [] call -> EOA / ProxyContract (tx.to) (gas=2,015,830)
+  [0] call -> DAI (gas=240)
+  [1] call -> DAI (gas=240)
+  [2] staticcall -> DAI [balanceOf(address)] (gas=2,602)
+  [3] call -> Aave V3 Pool (old) (gas=1,993,387)
+
+======================================================================
+  BEHAVIOR ANALYSIS
+======================================================================
+
+--- Flash Loan Detection ---
+  Aave V3 Pool calls: 2
+  Pattern: Borrow from Aave -> Execute via proxy -> Repay to Aave
+  Evidence:
+    - Direct call to Aave V3 Pool from tx.to
+    - Proxy contract (CREATE) deployed during execution
+    - Multiple DEX swaps via 1inch AggregationRouter inside proxy
+    - Token transfers: DAI in/out through Aave lending pool
+  Result: LIKELY FLASH LOAN (confidence: HIGH)
+
+--- DEX Arbitrage Detection ---
+  1inch DEX calls: 63
+  Pattern: Complex multi-hop swap through 1inch aggregator
+  Evidence:
+    - 1inch AggregationRouter used for DEX routing
+    - Multiple swap paths through different pools
+    - Gas token (CHI) interactions for gas optimization
+  Result: LIKELY DEX SWAP / ARBITRAGE (confidence: MEDIUM)
+
+--- Contract Creation (in-transaction) ---
+  2 contracts deployed during execution
+    Created: 0x583c21631c48d442b5c0e605d624f54a0b366c72
+    Created: 0xa0b3ee897f233f385e5d61086c32685257d4f12b
+  This is a proxy pattern used in 1inch V5 for atomic execution
+
+--- Gas Optimization ---
+  CHI GasToken interactions: 10
+  Pattern: Gas token (CHI) minted/burned to optimize gas costs
+  This is common in MEV/arb transactions
+
+======================================================================
+  SUMMARY
+======================================================================
+
+  Transaction: 0xc310a0af...6b111d
+  Block:       #16817996
+  Type:        Likely FLASH LOAN + ARBITRAGE via 1inch + Aave V3
+
+  Execution Flow:
+    1. EOA calls proxy contract (0xebc29...bf99)
+    2. Proxy calls Aave V3 Pool - borrows DAI (flash loan)
+    3. Proxy deploys 2 temporary contracts (CREATE)
+    4. 1inch AggregationRouter executes complex multi-hop DEX swaps:
+       - Multiple swap paths through various DEX pools
+       - Uses CHI gas token for gas optimization
+       - Likely converting DAI -> other tokens -> DAI (with profit)
+    5. Proxy repays Aave flash loan + fee
+    6. Profit remains with EOA
+
+  Key Addresses:
+    EOA:         0x5F259D0b...758B8c (tx sender)
+    Proxy:       0xeBC29199...0CBf99 (tx.to, user's smart wallet)
+    Lending:     Aave V3 Pool (old) - flash loan source
+    DEX:         1inch V5 AggregationRouter V5 - swap execution
+    Token:       DAI - primary token borrowed and swapped
+
+  Risk Indicators:
+    [!] Flash loan used (instant, no-collateral borrowing)
+    [!] In-transaction contract deployment (proxy pattern)
+    [!] Complex multi-hop DEX routing via aggregator
+    [!] Gas token optimization (MEV bot behavior)
+    [!] Single EOA, nonce=1 (possibly fresh wallet or bot)
+    [!] High gas price (56.8 gwei) - priority transaction

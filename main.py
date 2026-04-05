@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from routers import alertRouter
 from routers.rule_chain.router import ruleChainRouter
+from routers.knowledge_base import knowledgeBaseRouter
+from database.models import SessionLocal
 from config import settings
 import os
 import nodes
@@ -34,6 +36,55 @@ async def health_check():
 
 app.include_router(alertRouter)
 app.include_router(ruleChainRouter)
+app.include_router(knowledgeBaseRouter)
+
+
+# ──────────────── 启动时加载预置知识库样本 ────────────────
+
+@app.on_event("startup")
+async def seed_knowledge_base():
+    """应用启动时，如果知识库为空则加载预置样本"""
+    import json as _json
+    from database.models import KnowledgeBaseDB
+    from pathlib import Path
+
+    db = SessionLocal()
+    try:
+        count = db.query(KnowledgeBaseDB).count()
+        if count > 0:
+            return
+
+        sample_file = Path(__file__).parent / "data" / "sample_alerts.json"
+        if not sample_file.exists():
+            return
+
+        with open(sample_file, "r", encoding="utf-8") as f:
+            samples = _json.load(f)
+
+        for sample in samples:
+            row = KnowledgeBaseDB(
+                title=sample["title"],
+                description=sample.get("description"),
+                category=sample.get("category", "uncategorized"),
+                tags=_json.dumps(sample.get("tags", [])),
+                chain_id=sample.get("chain_id", 1),
+                tx_hash=sample.get("tx_hash", ""),
+                attacked_address=sample.get("attacked_address"),
+                exploiter_address=sample.get("exploiter_address"),
+                alert_data=_json.dumps(sample["alert_data"]),
+                expected_severity=sample.get("expected_severity"),
+                expected_labels=_json.dumps(sample.get("expected_labels", [])),
+                expected_min_score=sample.get("expected_min_score"),
+                source=sample.get("source", "preset"),
+                tx_explorer_url=sample.get("tx_explorer_url"),
+            )
+            db.add(row)
+
+        db.commit()
+    except Exception as e:
+        print(f"[seed] 加载预置样本失败: {e}")
+    finally:
+        db.close()
 
 # 静态前端文件服务 (仅当 dist 目录存在时)
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")

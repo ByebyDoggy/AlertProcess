@@ -156,6 +156,8 @@ class _TestAction(BaseNode):
 @pytest.fixture(autouse=True)
 def register_test_nodes():
     """每个测试前后注册/清理测试节点"""
+    # 保存注册表状态
+    saved_nodes = dict(NodeRegistry._nodes)
     NodeRegistry.register(_TestTrigger)
     NodeRegistry.register(_TestDetector)
     NodeRegistry.register(_TestComparator)
@@ -163,7 +165,9 @@ def register_test_nodes():
     NodeRegistry.register(_TestLogic)
     NodeRegistry.register(_TestAction)
     yield
-    NodeRegistry.clear()
+    # 恢复注册表到原始状态
+    NodeRegistry._nodes.clear()
+    NodeRegistry._nodes.update(saved_nodes)
 
 
 def make_simple_chain():

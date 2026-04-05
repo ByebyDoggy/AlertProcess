@@ -1,14 +1,16 @@
 from fastapi import APIRouter, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 import uuid
 import json
+import time
 
-from database.models import SessionLocal, RuleChainDB
+from database.models import SessionLocal, RuleChainDB, KnowledgeBaseDB
 from engine.parser import ChainParser
 from engine.validator import ChainValidator
+from engine.executor import ChainExecutor
 from nodes.base import NodeCategory, NodeRegistry
 
 
@@ -260,6 +262,158 @@ async def delete_rule_chain(
         db.delete(chain)
         db.commit()
         return {"status": "success", "message": "Rule chain deleted"}
+    finally:
+        db.close()
+
+
+# ──────────────── 测试运行端点 ────────────────
+
+class TestRunRequest(BaseModel):
+    sample_ids: list[str] = []
+    alert_data: Optional[dict[str, Any]] = None
+
+
+class TestRunResultItem(BaseModel):
+    sample_id: Optional[str] = None
+    sample_title: Optional[str] = None
+    chain_id: str
+    chain_name: str
+    success: bool
+    final_score: float = 0.0
+    final_severity: str = "UNKNOWN"
+    labels: list[str] = []
+    actions_executed: list[dict] = []
+    node_results: list[dict] = []
+    errors: list[str] = []
+    duration_ms: float = 0.0
+    expected_matched: Optional[bool] = None
+    expected_details: Optional[dict] = None
+
+
+def _check_expectations(ctx, sample: KnowledgeBaseDB | None) -> tuple[bool, dict]:
+    """对比执行结果与预期结果"""
+    if sample is None:
+        return None, None
+
+    severity_order = {"UNKNOWN": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+    details: dict[str, bool | str] = {}
+
+    # 严重级别匹配
+    severity_match = True
+    if sample.expected_severity:
+        expected_order = severity_order.get(sample.expected_severity, 0)
+        actual_order = severity_order.get(ctx.final_severity, 0)
+        severity_match = actual_order >= expected_order
+        details["severity"] = f"expected>={sample.expected_severity}, got={ctx.final_severity}"
+
+    # 标签匹配
+    labels_match = True
+    expected_labels = json.loads(sample.expected_labels) if isinstance(sample.expected_labels, str) else (sample.expected_labels or [])
+    if expected_labels:
+        missing = [l for l in expected_labels if l not in ctx.collected_labels]
+        labels_match = len(missing) == 0
+        details["labels"] = f"expected={expected_labels}, got={ctx.collected_labels}, missing={missing}"
+
+    # 最低评分匹配
+    score_match = True
+    if sample.expected_min_score is not None:
+        score_match = ctx.final_score >= sample.expected_min_score
+        details["score"] = f"expected>={sample.expected_min_score}, got={ctx.final_score}"
+
+    matched = severity_match and labels_match and score_match
+    return matched, details
+
+
+@ruleChainRouter.post("/{chain_id}/test-run")
+async def test_run_chain(
+    chain_id: str,
+    body: TestRunRequest,
+    x_api_key: Optional[str] = Header(None),
+    api_key: Optional[str] = None,
+):
+    """
+    用知识库样本或自定义数据测试运行规则链（dry-run 模式）。
+    Action 节点仅模拟执行，不会产生实际副作用。
+    """
+    auth_key = x_api_key if x_api_key else api_key
+    if not auth_key:
+        raise HTTPException(status_code=401, detail="API key is required")
+
+    db = SessionLocal()
+    try:
+        chain = db.query(RuleChainDB).filter(RuleChainDB.id == chain_id).first()
+        if not chain:
+            raise HTTPException(status_code=404, detail="Rule chain not found")
+
+        chain_config = json.loads(chain.chain_config) if isinstance(chain.chain_config, str) else chain.chain_config
+        parsed_chain = ChainParser.parse(chain_config)
+
+        # 准备测试数据
+        test_cases: list[tuple[str | None, str | None, dict]] = []
+
+        if body.alert_data:
+            test_cases.append((None, None, body.alert_data))
+        elif body.sample_ids:
+            samples = db.query(KnowledgeBaseDB).filter(
+                KnowledgeBaseDB.id.in_(body.sample_ids)
+            ).all()
+            for s in samples:
+                alert_data = json.loads(s.alert_data) if isinstance(s.alert_data, str) else s.alert_data
+                test_cases.append((s.id, s.title, alert_data))
+        else:
+            raise HTTPException(status_code=400, detail="Provide sample_ids or alert_data")
+
+        # 逐个执行
+        executor = ChainExecutor()
+        results = []
+
+        for sample_id, sample_title, alert_data in test_cases:
+            # 加载关联的知识库样本（用于预期比对）
+            sample = None
+            if sample_id:
+                sample = db.query(KnowledgeBaseDB).filter(KnowledgeBaseDB.id == sample_id).first()
+
+            start_time = time.monotonic()
+            ctx = await executor.execute(parsed_chain, alert_data, dry_run=True)
+            duration_ms = (time.monotonic() - start_time) * 1000
+
+            # 清理 alert_data 中的 dry_run 标记（避免污染输出）
+            alert_data_clean = {k: v for k, v in alert_data.items() if k != "__dry_run__"}
+
+            expected_matched, expected_details = _check_expectations(ctx, sample)
+
+            node_results = []
+            for log in ctx.logs:
+                node_def = parsed_chain.get_node(log.node_id)
+                node_results.append({
+                    "node_id": log.node_id,
+                    "node_type": log.node_type,
+                    "label": node_def.node_type if node_def else log.node_type,
+                    "score": log.score,
+                    "passed": log.passed,
+                    "duration_ms": round(log.duration_ms, 2),
+                    "error": log.error,
+                })
+
+            results.append(TestRunResultItem(
+                sample_id=sample_id,
+                sample_title=sample_title,
+                chain_id=chain_id,
+                chain_name=chain.name,
+                success=ctx.get_success(),
+                final_score=ctx.final_score,
+                final_severity=ctx.final_severity,
+                labels=ctx.collected_labels,
+                actions_executed=ctx.actions_executed,
+                node_results=node_results,
+                errors=ctx.errors,
+                duration_ms=round(duration_ms, 2),
+                expected_matched=expected_matched,
+                expected_details=expected_details,
+            ))
+
+        return {"results": [r.model_dump() for r in results]}
     finally:
         db.close()
 

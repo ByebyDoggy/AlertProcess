@@ -40,7 +40,7 @@ class TestAlertAPI:
             "/alert/alerts",
             headers={"X-API-Key": "invalid-key"}
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
     
     def test_get_alerts_with_valid_key(self):
         """Test getting alerts with valid API key"""

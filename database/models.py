@@ -2,6 +2,7 @@ from datetime import datetime
 from sqlalchemy import Enum, Text, DateTime, Column, String, Integer
 from sqlalchemy.ext.declarative import declarative_base
 import enum
+import uuid
 from config import settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -49,6 +50,34 @@ class RuleChainDB(Base):
     description = Column(Text, nullable=True)
     chain_config = Column(Text, nullable=False)
     enabled = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class KnowledgeBaseDB(Base):
+    __tablename__ = "knowledge_base"
+
+    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+
+    title = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    category = Column(String, index=True, default="uncategorized")
+    tags = Column(Text, default="[]")
+    chain_id = Column(Integer, index=True, default=1)
+
+    tx_hash = Column(String, index=True)
+    attacked_address = Column(String, nullable=True)
+    exploiter_address = Column(String, nullable=True)
+
+    alert_data = Column(Text, nullable=False)
+
+    expected_severity = Column(String, nullable=True)
+    expected_labels = Column(Text, default="[]")
+    expected_min_score = Column(Integer, nullable=True)
+
+    source = Column(String, default="manual")
+    tx_explorer_url = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

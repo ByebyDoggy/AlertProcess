@@ -74,7 +74,19 @@ class GasPriceDetector(BaseDetector):
 
     async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         gas_price_wei = context.get("gas_price")
-        gas_used = context.get("gas_used", 21000)  # 默认 21000（标准转账）
+        gas_used = context.get("gas_used", 21000)
+
+        # gas_price 和 gas_used 可能是字符串，转换为 int
+        if isinstance(gas_price_wei, str):
+            try:
+                gas_price_wei = int(gas_price_wei)
+            except (ValueError, TypeError):
+                gas_price_wei = None
+        if isinstance(gas_used, str):
+            try:
+                gas_used = int(gas_used)
+            except (ValueError, TypeError):
+                gas_used = 21000
 
         if gas_price_wei is None:
             # 尝试使用 gas_price_gwei

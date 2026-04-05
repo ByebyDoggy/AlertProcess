@@ -33,6 +33,7 @@ class ChainExecutor:
         self,
         chain: ParsedChain,
         alert_data: dict[str, Any],
+        dry_run: bool = False,
     ) -> ExecutionContext:
         """
         异步执行完整规则链。
@@ -40,11 +41,12 @@ class ChainExecutor:
         Args:
             chain: 解析后的规则链 DAG
             alert_data: 原始告警数据
+            dry_run: 是否为测试运行模式（Action 节点仅模拟）
 
         Returns:
             ExecutionContext 包含所有节点输出、日志和聚合结果
         """
-        ctx = ExecutionContext(alert_data=alert_data)
+        ctx = ExecutionContext(alert_data=alert_data, dry_run=dry_run)
 
         # 1. 校验规则链
         validation_errors = self._validator.validate(chain)
@@ -62,6 +64,9 @@ class ChainExecutor:
 
         # 3. 逐层并发执行
         for layer in layers:
+            # Dry-run 模式下注入标记
+            if dry_run:
+                ctx.alert_data["__dry_run__"] = True
             await self._execute_layer(layer, chain, ctx)
             # 如果有错误且不需要继续，可以提前终止
             # 当前设计: 即使某个节点失败，其他独立节点仍继续执行

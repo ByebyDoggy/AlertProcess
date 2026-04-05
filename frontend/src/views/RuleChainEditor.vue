@@ -43,6 +43,10 @@
           class="px-3 py-1.5 bg-emerald-600/80 hover:bg-emerald-600 disabled:bg-[#3d3d60] rounded-lg text-white text-sm font-medium transition">
           {{ validating ? '验证中...' : '验证规则链' }}
         </button>
+        <button @click="showTestRun = true" v-if="chainDataStore.currentChainId"
+          class="px-3 py-1.5 bg-amber-600/80 hover:bg-amber-600 rounded-lg text-white text-sm font-medium transition">
+          &#9889; 测试运行
+        </button>
         <button @click="handleDelete" v-if="chainDataStore.currentChainId" class="px-3 py-1.5 bg-red-600/80 hover:bg-red-600 rounded-lg text-white text-sm transition">
           删除
         </button>
@@ -115,6 +119,12 @@
     />
 
     <Toast :message="toast.message" :type="toast.type" :visible="toast.visible" />
+
+    <TestRunPanel
+      v-if="showTestRun"
+      :chain-id="chainDataStore.currentChainId"
+      @close="showTestRun = false"
+    />
   </div>
 </template>
 
@@ -132,9 +142,13 @@ import Canvas from '../components/editor/Canvas.vue'
 import NodeConfigPanel from '../components/config/NodeConfigPanel.vue'
 import EdgeInfoPanel from '../components/config/EdgeInfoPanel.vue'
 import Toast from '../components/common/Toast.vue'
+import TestRunPanel from '../components/editor/TestRunPanel.vue'
 
 const chainDataStore = useChainDataStore()
 const editorStore = useChainEditorStore()
+
+// Test run panel
+const showTestRun = ref(false)
 
 // Load node types
 useNodeTypes()

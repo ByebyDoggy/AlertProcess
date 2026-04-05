@@ -77,6 +77,13 @@ class FlashLoanDetector(BaseDetector):
         value = context.get("value", 0)
         chain_id = context.get("chain_id", 1)
 
+        # value 可能是字符串（JSON 存储），转换为 int
+        if isinstance(value, str):
+            try:
+                value = int(value)
+            except (ValueError, TypeError):
+                value = 0
+
         issues: list[str] = []
         score = 0.0
 

@@ -1,0 +1,142 @@
+[
+  {
+    "title": "Euler Finance 闪电贷攻击",
+    "description": "2023年3月 Euler Finance 被攻击，损失约 1.97 亿美元。攻击者通过 Aave V2 闪电贷获取资金，利用 Euler 的 donate-to-reserve 和部署恶意 vault 合约漏洞。",
+    "category": "flash_loan",
+    "tags": ["闪电贷", "Aave V2", "DeFi", "Euler Finance"],
+    "chain_id": 1,
+    "tx_hash": "0xcc...模拟数据",
+    "exploiter_address": "0xabc1234567890abcdef1234567890abcdef1234",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xcc...模拟数据",
+      "from_address": "0xabc1234567890abcdef1234567890abcdef1234",
+      "to_address": "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9",
+      "input_data": "0x0906f8c8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "value": "197000000000000000000",
+      "gas_price": 35000000000,
+      "gas_used": 650000,
+      "block_number": 16866000
+    },
+    "expected_severity": "CRITICAL",
+    "expected_labels": ["LARGE_FLASH_LOAN_ATTACK"],
+    "expected_min_score": 80,
+    "source": "preset",
+    "tx_explorer_url": "https://etherscan.io/tx/0xcc..."
+  },
+  {
+    "title": "异常 Gas 价格操纵",
+    "description": "交易 Gas 费用异常高，单笔交易 Gas 消耗超过 500 USD，疑似抢跑或 Gas 价格操纵行为。",
+    "category": "gas_manipulation",
+    "tags": ["Gas", "MEV", "抢跑"],
+    "chain_id": 1,
+    "tx_hash": "0xgas...模拟数据",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xgas...模拟数据",
+      "from_address": "0xmev1234567890abcdef1234567890abcdef1234",
+      "to_address": "0xdef1234567890abcdef1234567890abcdef1234",
+      "gas_price": 800000000000,
+      "gas_used": 300000,
+      "value": "0",
+      "input_data": "0xa9059cbb...",
+      "block_number": 17000000
+    },
+    "expected_severity": "HIGH",
+    "expected_labels": ["high_gas"],
+    "expected_min_score": 50,
+    "source": "preset"
+  },
+  {
+    "title": "可疑 ERC20 无限授权",
+    "description": "用户向未知合约授予无限 Token 授权（max uint256），典型的授权钓鱼攻击模式。攻击者后续可利用授权转走用户全部 Token。",
+    "category": "approval_phishing",
+    "tags": ["授权", "钓鱼", "ERC20", "无限授权"],
+    "chain_id": 1,
+    "tx_hash": "0xapr...模拟数据",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xapr...模拟数据",
+      "from_address": "0xvictim1234567890abcdef1234567890abcdef12",
+      "to_address": "0xmalicious1234567890abcdef1234567890abcdef",
+      "input_data": "0x095ea7b3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "value": "0",
+      "gas_price": 25000000000,
+      "gas_used": 50000,
+      "block_number": 16900000
+    },
+    "expected_severity": "MEDIUM",
+    "expected_labels": ["suspicious_approval"],
+    "expected_min_score": 40,
+    "source": "preset"
+  },
+  {
+    "title": "空地址创建合约（疑似 Honeypot）",
+    "description": "从空地址（null address）发起交易并创建新合约，常见于蜜罐/Honeypot 部署或恶意合约创建场景。",
+    "category": "unknown",
+    "tags": ["空地址", "合约创建", "Honeypot"],
+    "chain_id": 1,
+    "tx_hash": "0xnull...模拟数据",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xnull...模拟数据",
+      "from_address": "0x0000000000000000000000000000000000000000",
+      "to_address": "",
+      "input_data": "0x6080604052...",
+      "value": "0",
+      "gas_price": 20000000000,
+      "gas_used": 500000,
+      "block_number": 17050000
+    },
+    "expected_severity": "MEDIUM",
+    "expected_labels": [],
+    "expected_min_score": 30,
+    "source": "preset"
+  },
+  {
+    "title": "dYdX 闪电贷交互（大额）",
+    "description": "与 dYdX 混合合约交互并调用 flash 方法，交易金额超过 10 万美元。需进一步分析是否为攻击行为。",
+    "category": "flash_loan",
+    "tags": ["闪电贷", "dYdX", "大额交易"],
+    "chain_id": 1,
+    "tx_hash": "0xdyd...模拟数据",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xdyd...模拟数据",
+      "from_address": "0xtrader1234567890abcdef1234567890abcdef",
+      "to_address": "0x1e0447b19bb6ecfdae1e4ae1694b0c3659614e4e",
+      "input_data": "0x5c7d2920000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "value": "150000000000000000000",
+      "gas_price": 30000000000,
+      "gas_used": 280000,
+      "block_number": 17080000
+    },
+    "expected_severity": "HIGH",
+    "expected_labels": ["LARGE_FLASH_LOAN"],
+    "expected_min_score": 50,
+    "source": "preset"
+  },
+  {
+    "title": "正常 ETH 转账（低风险对照样本）",
+    "description": "一笔普通的 ETH 转账交易，Gas 费用正常，无异常行为。用于对照测试规则链不应误报的场景。",
+    "category": "unknown",
+    "tags": ["正常交易", "对照样本"],
+    "chain_id": 1,
+    "tx_hash": "0xnormal...模拟数据",
+    "alert_data": {
+      "chain_id": 1,
+      "tx_hash": "0xnormal...模拟数据",
+      "from_address": "0xuser1234567890abcdef1234567890abcdef1234",
+      "to_address": "0xrecipient1234567890abcdef1234567890abcdef",
+      "input_data": "0x",
+      "value": "1000000000000000000",
+      "gas_price": 15000000000,
+      "gas_used": 21000,
+      "block_number": 17100000
+    },
+    "expected_severity": "UNKNOWN",
+    "expected_labels": [],
+    "expected_min_score": 0,
+    "source": "preset"
+  }
+]
