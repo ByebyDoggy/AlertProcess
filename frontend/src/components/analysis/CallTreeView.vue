@@ -34,8 +34,13 @@
       </div>
 
       <!-- 加载中 -->
-      <div v-else-if="store.isLoading" class="ctv-loading">
+      <div v-else-if="store.isCallTreeLoading" class="ctv-loading">
         <span class="ctv-spin">&#8635;</span> Tracing transaction...
+      </div>
+
+      <!-- 错误 -->
+      <div v-else-if="store.callTreeError" class="ctv-error">
+        <span>&#9888;</span> {{ store.callTreeError }}
       </div>
 
       <!-- 调用树 -->
@@ -153,6 +158,10 @@ function handleSelect() {
 }
 .ctv-empty-icon { font-size: 36px; opacity: .6; }
 .ctv-loading { color: #8b949e; font-size: 13px; }
+.ctv-error {
+  display: flex; align-items: center; justify-content: center;
+  height: 160px; color: #f85149; font-size: 12px; gap: 8px;
+}
 .ctv-spin { animation: spin 1s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

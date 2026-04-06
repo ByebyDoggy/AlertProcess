@@ -84,6 +84,18 @@ class AnalyzeResponse(BaseModel):
     selectorStats: list[dict] = []
 
 
+# ── 拆分端点的请求/响应模型 ──
+
+class PanelRequest(BaseModel):
+    """面板数据请求 — 共享基础参数"""
+    tx_hash: str = Field(
+        ...,
+        description="Transaction hash (with 0x prefix)",
+        pattern=r"^0x[0-9a-fA-F]{64}$",
+    )
+    chain_id: int = Field(default=1, ge=1, description="Chain ID")
+
+
 # ================================================================
 # 端点实现
 # ================================================================
@@ -130,6 +142,120 @@ async def analyze_transaction(req: AnalyzeRequest):
             status_code=500,
             detail=f"Analysis failed: {str(e)}",
         )
+
+
+# ── 拆分端点: 各面板独立数据获取 (并发友好) ──
+
+@trace_router.post("/call-tree", response_model=None)
+async def get_call_tree(req: PanelRequest):
+    """
+    获取交易调用树数据（仅 root + meta + txInfo + selectorStats）
+
+    适用于 CallTreeView 面板独立加载，避免等待 token flow / behavior 等计算。
+    """
+    t0 = time.time()
+    analyzer = _get_analyzer()
+    try:
+        result = await analyzer.analyze(
+            tx_hash=req.tx_hash,
+            chain_id=req.chain_id,
+            run_behavior_detect=False,
+        )
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "meta": result.meta,
+            "txInfo": result.tx_info.to_dict(),
+            "root": result.root.to_dict() if result.root else None,
+            "selectorStats": result.selector_stats,
+            "apiElapsedSeconds": elapsed,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[call-tree] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Call tree analysis failed: {str(e)}")
+
+
+@trace_router.post("/balance-changes", response_model=None)
+async def get_balance_changes(req: PanelRequest):
+    """
+    获取交易余额变化数据
+
+    适用于 BalanceChangesPanel 面板独立加载。
+    """
+    t0 = time.time()
+    analyzer = _get_analyzer()
+    try:
+        result = await analyzer.analyze(
+            tx_hash=req.tx_hash,
+            chain_id=req.chain_id,
+            run_behavior_detect=False,
+        )
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "balanceChanges": [b.to_dict() for b in result.balance_changes],
+            "apiElapsedSeconds": elapsed,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[balance-changes] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Balance changes analysis failed: {str(e)}")
+
+
+@trace_router.post("/token-flows", response_model=None)
+async def get_token_flows(req: PanelRequest):
+    """
+    获取 Token 流转数据
+
+    适用于 TokenFlowPanel 面板独立加载。
+    """
+    t0 = time.time()
+    analyzer = _get_analyzer()
+    try:
+        result = await analyzer.analyze(
+            tx_hash=req.tx_hash,
+            chain_id=req.chain_id,
+            run_behavior_detect=False,
+        )
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "tokenFlows": [f.to_dict() for f in result.token_flows],
+            "apiElapsedSeconds": elapsed,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[token-flows] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Token flows analysis failed: {str(e)}")
+
+
+@trace_router.post("/behaviors", response_model=None)
+async def get_behaviors(req: PanelRequest):
+    """
+    获取行为检测结果
+
+    适用于 BehaviorPanel 面板独立加载。包含完整分析流程中的行为检测步骤。
+    """
+    t0 = time.time()
+    analyzer = _get_analyzer()
+    try:
+        result = await analyzer.analyze(
+            tx_hash=req.tx_hash,
+            chain_id=req.chain_id,
+            run_behavior_detect=True,
+        )
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "behaviors": [b.to_dict() for b in result.behaviors],
+            "protocols": [p.to_dict() for p in result.protocols],
+            "apiElapsedSeconds": elapsed,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[behaviors] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Behavior detection failed: {str(e)}")
 
 
 @trace_router.post("/analyze-with-flash-detect", response_model=None)

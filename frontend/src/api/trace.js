@@ -54,3 +54,45 @@ export async function lookupSignatures(hex) {
 export async function getSignatureStats() {
   return apiService.request(`${TRACE_BASE}/stats`)
 }
+
+// ── 拆分端点: 各面板独立数据获取 ──
+
+/**
+ * 获取调用树数据 (CallTreeView 独立使用)
+ */
+export async function fetchCallTree(txHash, chainId = 1) {
+  return apiService.request(`${TRACE_BASE}/call-tree`, {
+    method: 'POST',
+    body: JSON.stringify({ tx_hash: txHash, chain_id: chainId }),
+  })
+}
+
+/**
+ * 获取余额变化数据 (BalanceChangesPanel 独立使用)
+ */
+export async function fetchBalanceChanges(txHash, chainId = 1) {
+  return apiService.request(`${TRACE_BASE}/balance-changes`, {
+    method: 'POST',
+    body: JSON.stringify({ tx_hash: txHash, chain_id: chainId }),
+  })
+}
+
+/**
+ * 获取 Token 流转数据 (TokenFlowPanel 独立使用)
+ */
+export async function fetchTokenFlows(txHash, chainId = 1) {
+  return apiService.request(`${TRACE_BASE}/token-flows`, {
+    method: 'POST',
+    body: JSON.stringify({ tx_hash: txHash, chain_id: chainId }),
+  })
+}
+
+/**
+ * 获取行为检测结果 (BehaviorPanel 独立使用)
+ */
+export async function fetchBehaviors(txHash, chainId = 1) {
+  return apiService.request(`${TRACE_BASE}/behaviors`, {
+    method: 'POST',
+    body: JSON.stringify({ tx_hash: txHash, chain_id: chainId }),
+  })
+}

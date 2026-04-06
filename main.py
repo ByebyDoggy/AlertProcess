@@ -9,6 +9,17 @@ from routers.detectors import trace_router
 from database.models import SessionLocal
 from config import settings
 import os
+import logging
+
+# 配置根日志级别 — SignatureDB 的 [TIMING] 和 [API] 日志需要 INFO 级别可见
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+# 降低 uvicorn/access 默认日志噪音
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 import nodes
 from nodes.base import NodeRegistry
 

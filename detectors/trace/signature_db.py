@@ -1,15 +1,14 @@
 """
-4-byte 函数签名查询服务（三级缓存）
+4-byte 函数签名查询服务（二级缓存 + 在线回退）
 ===================================
 查询优先级:
-  1. 内置常用签名 (内存)
-  2. 本地 SQLite 数据库 (data/signatures.db)
-  3. 4byte.directory 在线 API
+  1. 本地 SQLite 数据库 (data/signatures.db)
+  2. 4byte.directory 在线 API
      GET /api/v1/signatures/?hex_signature=0xa9059cbb
-  4. Unknown 标记回填到本地数据库
+  3. Unknown 标记回填到本地数据库
 
 重要: 一个 selector 可能对应多个函数签名 (多义性),
-      lookup_all() 返回该 selector 的全部候选签名列表。
+      lookup_all() 返回该 selector 的全部候选签名列表，按 id ASC 排序（ID最小优先）。
 
 存储: SQLite (signatures.db)
 表结构:
@@ -49,7 +48,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # ── 路径配置 ──────────────────────────────────────────────
-_DEFAULT_DB_PATH = Path(__file__).resolve().parents[3] / "data" / "signatures.db"
+_DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "signatures.db"
 _4BYTE_API_BASE = "https://www.4byte.directory/api/v1/signatures/"
 _API_TIMEOUT = 10  # 秒
 
@@ -69,38 +68,15 @@ CREATE INDEX IF NOT EXISTS idx_selector_prefix
     ON signatures(selector);
 """
 
-
-# 内置常用签名 (在 SQLite 库未就绪时的 fallback)
-_BUILTIN_SIGNATURES: dict[str, str] = {
-    "0xa9059cbb": "transfer(address,uint256)",
-    "0x23b872dd": "transferFrom(address,address,uint256)",
-    "0x095ea7b3": "approve(address,uint256)",
-    "0x70a08231": "balanceOf(address)",
-    "0x18160ddd": "totalSupply()",
-    "0xdd62ed3e": "allowance(address,address)",
-    "0x38ed1739": "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
-    "0x18cbafe5": "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-    "0x7ff36ab5": "swapExactETHForTokens(uint256[],address[],address,uint256)",
-    "0x414bf389": "exactInputSingle((address,uint24,address,uint256,uint256,uint256))",
-    "0x04e45aaf": "exactInput(bytes)",
-    "0xd0e30db0": "deposit()",
-    "0x2e1a7d4d": "withdraw(uint256)",
-    "0x8afff657": "flashLoan(address,address,uint256,bytes,uint16)",
-    "0xa5215b6a": "flashLoanSimple(address,address,uint256,uint16)",
-    "0x9e9623cd": "supply(address,uint256,address,uint16)",
-    "0x41c728b9": "withdraw(address,uint256,address)",
-    "0x4a58c4c4": "borrow(address,uint256,uint256,uint16,address)",
-    "0xa15cc3a3": "repay(address,uint256,uint256,address)",
-    "0xac9650d8": "multicall(bytes[])",
-}
-
 # Unknown 签名标记
 _UNKNOWN_SIGNATURE_PREFIX = "Unknown("
 
 
 class SignatureDB:
     """
-    本地 4-byte 签名数据库 (三级查询: DB → 4byte API → Unknown 回填)
+    本地 4-byte 签名数据库（二级查询: SQLite → 4byte API → Unknown 回退）
+
+    排序规则: 多个签名时按 id ASC 升序排列，ID 最小的优先。
 
     用法:
         db = SignatureDB()
@@ -109,8 +85,8 @@ class SignatureDB:
         count = db.count()
 
     查询链路:
-        1. 本地 SQLite → 命中则返回
-        2. 4byte.directory API → 命中则返回并写入 DB
+        1. 本地 SQLite (ORDER BY id ASC) → 命中则返回
+        2. 4byte.directory API (按 API 返回的 id 升序) → 命中则返回并写入 DB
         3. 标记为 Unknown(0x...) → 写入 DB 避免重复查询
     """
 
@@ -118,24 +94,31 @@ class SignatureDB:
         """
         Args:
             db_path: SQLite 数据库路径。默认使用项目 data/signatures.db。
-                     若传入 None 则使用内置签名 (纯内存模式，无持久化)。
+                     若传入空字符串 "" 则使用纯内存模式（无持久化）。
         """
+        self._conn = None  # 先初始化，避免 _ensure_db 访问未定义属性
+
+        # 默认使用项目内置路径
         if db_path is None:
+            self.db_path = _DEFAULT_DB_PATH
+        elif isinstance(db_path, str) and db_path.strip() == "":
+            # 空字符串 → 纯内存模式
             self.db_path = None
             self._conn = None
             self._use_fallback = True
-            self._api_enabled = False  # fallback 模式下不调 API
-            logger.info("[SignatureDB] Using built-in fallback signatures only")
+            self._api_enabled = bool(httpx or requests)
+            logger.info("[SignatureDB] Using in-memory mode only")
             return
+        else:
+            self.db_path = Path(db_path)
 
-        self.db_path = Path(db_path)
         self._use_fallback = not self.db_path.exists()
         # API 查询开关: 即使有 DB 也启用在线回退
         self._api_enabled = bool(httpx or requests)
 
         if self._use_fallback:
             logger.warning(
-                f"[SignatureDB] DB not found at {db_path}, using fallback + API fallback"
+                f"[SignatureDB] DB not found at {self.db_path}, using API fallback"
             )
             self._conn = None
         else:
@@ -185,35 +168,30 @@ class SignatureDB:
 
     def lookup_all(self, selector: str) -> list[str]:
         """
-        精确查询 selector 对应的全部函数签名列表（三级查找，多结果）
+        精确查询 selector 对应的全部函数签名列表（二级查找，多结果）
 
         查询链路:
-          1. 内置签名 → 命中则返回 [best]
-          2. 本地数据库 → 返回全部匹配的 text_signature 列表（排除 Unknown）
-          3. 4byte API   → 获取全部 results 并写入 DB，返回全部
-          4. Unknown     → 标记并写入 DB
+          1. 本地数据库 → 返回全部匹配的 text_signature 列表（按 id ASC 排序，排除 Unknown）
+          2. 4byte API   → 获取全部结果（按 API 返回的 id 升序）并写入 DB，返回全部
+          3. Unknown     → 标记并写入 DB
 
         Args:
             selector: 10字符 hex string
 
         Returns:
-            签名文本列表，按 num_results DESC 排序。
+            签名文本列表，按 id ASC 排序（ID最小的优先）。
             空列表表示完全未命中（连 Unknown 都没标记）。
         """
         sel = self._normalize_selector(selector)
         if not sel:
             return []
 
-        # Level 1: 内置签名 → 单条
-        if sel in _BUILTIN_SIGNATURES:
-            return [_BUILTIN_SIGNATURES[sel]]
-
-        # Level 2: 本地数据库 → 全部
+        # Level 1: 本地数据库 → 全部 (按 id ASC 排序)
         db_results = self._lookup_db_all(sel)
         if db_results is not None:
             return db_results  # 已有数据（可能为空列表 = 只有 Unknown）
 
-        # Level 3: 4byte API 在线查询 → 获取全部结果
+        # Level 2: 4byte API 在线查询 → 获取全部结果
         if self._api_enabled:
             api_results = self._query_4byte_api_all(sel)
             if api_results:
@@ -222,7 +200,7 @@ class SignatureDB:
                     self._save_to_db(sel, sig)
                 return api_results
 
-        # Level 4: 全部未命中 → 标记 Unknown 并入库
+        # Level 3: 全部未命中 → 标记 Unknown 并入库
         unknown_sig = f"{_UNKNOWN_SIGNATURE_PREFIX}{sel})"
         self._save_to_db(sel, unknown_sig)
         return []
@@ -233,7 +211,7 @@ class SignatureDB:
         使用并发 API 查询提升性能。
 
         Returns:
-            {selector: [signature_list], ...}  每个 selector 对应全部候选签名列表
+            {selector: [signature_list], ...}  每个 selector 对应全部候选签名列表（按 id ASC 排序）
         """
         if not selectors:
             return {}
@@ -245,31 +223,27 @@ class SignatureDB:
                 normalized.add(ns)
 
         result: dict[str, list[str]] = {}
-        remaining: list[str] = []
+        remaining: list[str] = list(normalized)
 
-        # Level 1: 内置签名
-        for sel in normalized:
-            if sel in _BUILTIN_SIGNATURES:
-                result[sel] = [_BUILTIN_SIGNATURES[sel]]
-            else:
-                remaining.append(sel)
-
-        if not remaining:
-            return result
-
-        # Level 2: 本地数据库批量查询
-        if not self._use_fallback:
+        # Level 1: 本地数据库批量查询
+        if remaining and not self._use_fallback:
             db_result = self._bulk_lookup_db(remaining)
             for sel in remaining:
                 sigs = db_result.get(sel)
                 if sigs is not None and len(sigs) > 0:
                     result[sel] = sigs
-            # 收集仍未命中的 selector（DB 中无任何非 Unknown 记录）
+                elif sigs == []:
+                    # DB 中已有该 selector 的 Unknown 记录 → 直接标记为Unknown，不再查API
+                    unknown_sig = f"{_UNKNOWN_SIGNATURE_PREFIX}{sel})"
+                    result[sel] = [unknown_sig]
+            # 收集仍需API查询的 selector（DB中完全无记录的）
             missing = [s for s in remaining if s not in result]
-        else:
+        elif self._use_fallback:
             missing = remaining.copy()
+        else:
+            missing = []
 
-        # Level 3: 并发 API 查询未命中的 selector
+        # Level 2: 并发 API 查询未命中的 selector
         if missing and self._api_enabled:
             api_results = self._bulk_query_4byte_api(missing)
             for sel, sig_list in api_results.items():
@@ -278,7 +252,7 @@ class SignatureDB:
                     for sig in sig_list:
                         self._save_to_db(sel, sig)
 
-        # Level 4: 对仍然未命中的标记 Unknown
+        # Level 3: 对仍然未命中的标记 Unknown
         final_missing = [s for s in missing if s not in result]
         for sel in final_missing:
             unknown_sig = f"{_UNKNOWN_SIGNATURE_PREFIX}{sel})"
@@ -298,38 +272,28 @@ class SignatureDB:
             {
                 "selector": "0xa9059cbb",
                 "signatures": [
-                    {"text": "transfer(address,uint256)", "num_results": 12345},
-                    {"text": "transfer(address,address,uint256)", ...},
+                    {"text": "transfer(address,uint256)", "id": 123},
                     ...
                 ],
-                "total": 2,
-                "source": "db" | "api" | "builtin" | "unknown"
+                "total": N,
+                "source": "db" | "api" | "unknown"
             }
         """
         sel = self._normalize_selector(hex_sig)
         if not sel:
             return {"selector": sel, "signatures": [], "total": 0, "source": "invalid"}
 
-        # Level 1: 内置
-        if sel in _BUILTIN_SIGNATURES:
-            return {
-                "selector": sel,
-                "signatures": [{"text": _BUILTIN_SIGNATURES[sel], "num_results": 0}],
-                "total": 1,
-                "source": "builtin",
-            }
-
-        # Level 2: 本地数据库
+        # Level 1: 本地数据库
         if not self._use_fallback:
             conn = self._get_conn()
             rows = conn.execute(
-                "SELECT text_signature, num_results FROM signatures "
+                "SELECT id, text_signature, num_results FROM signatures "
                 "WHERE selector=? AND NOT text_signature LIKE ? "
-                "ORDER BY num_results DESC",
+                "ORDER BY id ASC",
                 (sel, f"{_UNKNOWN_SIGNATURE_PREFIX}%"),
             ).fetchall()
             if rows:
-                sigs = [{"text": r["text_signature"], "num_results": r["num_results"]} for r in rows]
+                sigs = [{"text": r["text_signature"], "id": r["id"], "num_results": r["num_results"]} for r in rows]
                 return {"selector": sel, "signatures": sigs, "total": len(sigs), "source": "db"}
 
             # 检查是否已有 Unknown 标记
@@ -340,7 +304,7 @@ class SignatureDB:
             if has_unknown:
                 return {"selector": sel, "signatures": [], "total": 0, "source": "unknown"}
 
-        # Level 3: API
+        # Level 2: API
         if self._api_enabled:
             api_sigs = self._query_4byte_api_all(sel)
             if api_sigs:
@@ -348,12 +312,12 @@ class SignatureDB:
                     self._save_to_db(sel, s)
                 return {
                     "selector": sel,
-                    "signatures": [{"text": s, "num_results": 0} for s in api_sigs],
+                    "signatures": [{"text": s} for s in api_sigs],
                     "total": len(api_sigs),
                     "source": "api",
                 }
 
-        # Level 4: Unknown
+        # Level 3: Unknown
         unknown_sig = f"{_UNKNOWN_SIGNATURE_PREFIX}{sel})"
         self._save_to_db(sel, unknown_sig)
         return {
@@ -363,25 +327,31 @@ class SignatureDB:
             "source": "unknown",
             "unknown_label": unknown_sig,
         }
+
+    def prefix_search(self, prefix: str, limit: int = 20) -> list[dict]:
+        """
+        前缀模糊搜索签名
+
+        Args:
+            prefix: 选择器前缀，如 "0xa905"
+            limit: 最大返回条数
+
+        Returns:
+            [{"selector": ..., "signature": ...}, ...]
+        """
         pfx = prefix.strip().lower()
         if not pfx.startswith("0x"):
             pfx = "0x" + pfx
 
-        # Fallback 模式
+        # Fallback 模式（无 DB 时返回空列表）
         if self._use_fallback:
-            results = []
-            for sel, sig in _BUILTIN_SIGNATURES.items():
-                if sel.startswith(pfx):
-                    results.append({"selector": sel, "signature": sig})
-                if len(results) >= limit:
-                    break
-            return results
+            return []
 
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT DISTINCT selector, text_signature FROM signatures "
-            "WHERE selector LIKE ? ORDER BY selector LIMIT ?",
-            (pfx + "%", limit),
+            "WHERE selector LIKE ? AND NOT text_signature LIKE ? ORDER BY id ASC LIMIT ?",
+            (pfx + "%", f"{_UNKNOWN_SIGNATURE_PREFIX}%", limit),
         ).fetchall()
         return [
             {"selector": r["selector"], "signature": r["text_signature"]}
@@ -391,7 +361,7 @@ class SignatureDB:
     def count(self, conn: sqlite3.Connection | None = None) -> int:
         """返回数据库中总条数"""
         if self._use_fallback:
-            return len(_BUILTIN_SIGNATURES)
+            return 0
         c = conn or self._get_conn()
         row = c.execute("SELECT COUNT(*) as cnt FROM signatures").fetchone()
         return row["cnt"] if row else 0  # type: ignore[index]
@@ -412,7 +382,7 @@ class SignatureDB:
             ).fetchone()
             unknown_count = unk_row["cnt"] if unk_row else 0
         elif self._use_fallback:
-            unique_selectors = total
+            unique_selectors = 0
 
         return {
             "total_signatures": total,
@@ -454,7 +424,7 @@ class SignatureDB:
         """
         从本地数据库查询单个 selector 的全部签名（跳过 Unknown 条目）
         Returns:
-          签名列表 (按 num_results DESC)，或 None 表示 DB 中无任何记录
+          签名列表 (按 id ASC 升序，ID最小的优先)，或 None 表示 DB 中无任何记录
         """
         if self._use_fallback:
             return None
@@ -462,7 +432,7 @@ class SignatureDB:
         rows = conn.execute(
             "SELECT text_signature FROM signatures "
             "WHERE selector=? AND NOT text_signature LIKE ? "
-            "ORDER BY num_results DESC",
+            "ORDER BY id ASC",
             (selector, f"{_UNKNOWN_SIGNATURE_PREFIX}%"),
         ).fetchall()
         if not rows:
@@ -477,7 +447,7 @@ class SignatureDB:
         return [r["text_signature"] for r in rows]
 
     def _bulk_lookup_db(self, selectors: list[str]) -> dict[str, list[str] | None]:
-        """批量数据库查询（每个 selector 返回全部签名列表）"""
+        """批量数据库查询（每个 selector 返回全部签名列表，按 id ASC 排序）"""
         if not selectors or self._use_fallback:
             return {}
         conn = self._get_conn()
@@ -486,7 +456,7 @@ class SignatureDB:
             f"SELECT selector, text_signature FROM signatures "
             f"WHERE selector IN ({placeholders}) "
             f"AND NOT text_signature LIKE ? "
-            f"ORDER BY num_results DESC",
+            f"ORDER BY id ASC",
             [*selectors, f"{_UNKNOWN_SIGNATURE_PREFIX}%"],
         ).fetchall()
         result: dict[str, list[str] | None] = {}
@@ -556,7 +526,7 @@ class SignatureDB:
         API: GET https://www.4byte.directory/api/v1/signatures/?hex_signature=0xa9059cbb
 
         Returns:
-            全部签名文本列表（按 num_results DESC），空列表表示无结果
+            全部签名文本列表（按 API 返回的 id ASC 排列，ID最小的优先），空列表表示无结果
         """
         url = f"{_4BYTE_API_BASE}?hex_signature={selector}"
         data = self._http_get(url)
@@ -565,12 +535,9 @@ class SignatureDB:
 
         results = data.get("results", [])
         if results:
-            # 返回全部结果，按 num_results 降序排列（API 默认排序）
-            sigs = []
-            for item in results:
-                text_sig = item.get("text_signature")
-                if text_sig:
-                    sigs.append(text_sig)
+            # 按 API 的 id 升序排列（ID 最小的优先）
+            sorted_results = sorted(results, key=lambda item: int(item.get("id", 0)))
+            sigs = [item["text_signature"] for item in sorted_results if item.get("text_signature")]
             if sigs:
                 logger.debug("[SignatureDB] API 命中 %s → %d 个签名", selector, len(sigs))
                 return sigs
@@ -586,7 +553,7 @@ class SignatureDB:
         """
         if not selectors:
             return {}
-        
+
         max_workers = min(8, len(selectors))
         result: dict[str, list[str]] = {}
 
@@ -603,13 +570,6 @@ class SignatureDB:
                 except Exception as e:
                     logger.warning("[SignatureDB] API 查询异常 %s: %s", sel, e)
                     result[sel] = []
-
-        hit_count = sum(1 for v in result.values() if v is not None)
-        if hit_count > 0:
-            logger.debug(
-                "[SignatureDB] 批量 API 查询完成: %d/%d 命中",
-                hit_count, len(selectors),
-            )
 
         return result
 

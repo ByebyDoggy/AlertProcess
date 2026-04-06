@@ -5,8 +5,18 @@
       <span class="tfp-icon">&#128176;</span> Token Flows
     </h3>
 
-    <div v-if="!flows.length" class="tfp-empty">
+    <div v-if="!effectiveFlows.length && !isLoading" class="tfp-empty">
       <span class="tfp-empty-ic">&#128270;</span> No token transfers detected
+    </div>
+
+    <!-- 加载中 -->
+    <div v-else-if="isLoading" class="tfp-loading">
+      <span class="bp-spin">&#8635;</span> Analyzing token flows...
+    </div>
+
+    <!-- 错误 -->
+    <div v-else-if="hasError && !effectiveFlows.length" class="tfp-empty">
+      <span>&#9888;</span> {{ store.tokenFlowError }}
     </div>
 
     <template v-else>
@@ -63,13 +73,25 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useTraceStore } from '@/stores/traceAnalysis.js'
 
 const props = defineProps({ flows: { type: Array, default: () => [] } })
+const store = useTraceStore()
+
+// 支持独立加载模式
+const effectiveFlows = computed(() => {
+  if (props.flows && props.flows.length > 0) return props.flows
+  return store.tokenFlows
+})
+const isLoading = computed(() => props.flows ? false : store.isTokenFlowLoading)
+const hasError = computed(() => props.flows ? false : !!store.tokenFlowError)
 
 // 按 tokenSymbol 分组
 const groupedFlows = computed(() => {
+  const flows = effectiveFlows.value
   const groups = {}
-  for (const f of props.flows) {
+  for (let i = 0; i < flows.length; i++) {
+    const f = flows[i]
     const sym = f.tokenSymbol || 'UNKNOWN'
     if (!groups[sym]) {
       groups[sym] = {
@@ -157,6 +179,14 @@ function formatAmount(v) {
   font-size: 11.5px; display: flex; align-items: center; justify-content: center; gap: 5px;
 }
 .tfp-empty-ic { opacity: .5; }
+
+/* Loading */
+.tfp-loading {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 16px 8px; color: #8b949e; font-size: 11.5px;
+}
+.bp-spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Summary bar ── */
 .tfp-summary {

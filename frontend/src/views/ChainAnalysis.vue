@@ -9,13 +9,13 @@
           type="text"
           placeholder="0x..."
           class="ca-tx-input"
-          :disabled="store.isLoading"
+          :disabled="store.isAnyPanelLoading"
           @keyup.enter="handleAnalyze"
         />
       </div>
       <div class="ca-input-group">
         <label class="ca-label">CHAIN</label>
-        <select v-model="store.chainId" class="ca-chain-sel" :disabled="store.isLoading">
+        <select v-model="store.chainId" class="ca-chain-sel" :disabled="store.isAnyPanelLoading">
           <option v-for="c in store.supportedChains" :key="c.chainId" :value="c.chainId">
             {{ c.name }}
           </option>
@@ -24,10 +24,10 @@
       <button
         class="ca-analyze-btn"
         :class="{ loading: store.isLoading }"
-        :disabled="store.isLoading || !store.txHash.trim()"
+        :disabled="store.isAnyPanelLoading || !store.txHash.trim()"
         @click="handleAnalyze"
       >
-        {{ store.isLoading ? 'Analyzing...' : 'Analyze' }}
+        {{ store.isAnyPanelLoading ? 'Analyzing...' : 'Analyze' }}
       </button>
 
       <div v-if="store.hasError" class="ca-error">&#9888; {{ store.error }}</div>
@@ -50,18 +50,18 @@
       </section>
 
       <!-- Panel 2: Balance Changes (全宽) -->
-      <section v-if="store.balanceChanges.length" class="ca-section">
-        <BalanceChangesPanel :changes="store.balanceChanges" />
+      <section class="ca-section">
+        <BalanceChangesPanel />
       </section>
 
-      <!-- Panel 3: Token Flows (全宽) -->
+      <!-- Panel 3: Fund Flow Diagram (全宽) -->
       <section class="ca-section">
-        <TokenFlowPanel :flows="store.tokenFlows" />
+        <FundFlowPanel :fundFlowData="store.fundFlowData" />
       </section>
 
       <!-- Panel 4: Behavior Detection (全宽) -->
       <section class="ca-section">
-        <BehaviorPanel :isLoading="store.isLoading" />
+        <BehaviorPanel />
       </section>
 
       <!-- Panel 5: Protocols + TX Info (并排) -->
@@ -101,8 +101,8 @@ import { reactive, computed, onMounted } from 'vue'
 import { useTraceStore } from '@/stores/traceAnalysis.js'
 import CallTreeView from '@/components/analysis/CallTreeView.vue'
 import BehaviorPanel from '@/components/analysis/BehaviorPanel.vue'
-import TokenFlowPanel from '@/components/analysis/TokenFlowPanel.vue'
 import BalanceChangesPanel from '@/components/analysis/BalanceChangesPanel.vue'
+import FundFlowPanel from '@/components/analysis/FundFlowPanel.vue'
 
 const store = useTraceStore()
 
@@ -113,7 +113,7 @@ const sections = reactive({
 onMounted(() => { store.loadSupportedChains() })
 
 async function handleAnalyze() {
-  await store.analyzeTransaction()
+  await store.loadPanelsConcurrent()
   // 分析完成后默认展开所有 section
   sections.tree = true
 }

@@ -5,13 +5,17 @@
     </h3>
 
     <!-- 无检测到 -->
-    <div v-if="!behaviors.length && !isLoading" class="bp-empty">
-      <span class="bp-ok">&#10003;</span>
-      No suspicious patterns detected
+    <div v-if="!behaviors.length && !effectiveLoading && !hasError" class="bp-empty">
+      <span class="bp-ok">&#10003;</span> No suspicious patterns detected
+    </div>
+
+    <!-- 错误 -->
+    <div v-else-if="hasError && !effectiveLoading && !behaviors.length" class="bp-error">
+      <span>&#9888;</span> {{ store.behaviorError }}
     </div>
 
     <!-- 加载中 -->
-    <div v-else-if="isLoading" class="bp-loading">
+    <div v-else-if="effectiveLoading && !behaviors.length" class="bp-loading">
       <span class="bp-spin">&#8635;</span> Scanning behaviors...
     </div>
 
@@ -73,9 +77,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useTraceStore } from '@/stores/traceAnalysis.js'
 import { getSignatureStats } from '@/api/trace.js'
 
-defineProps({ isLoading: { type: Boolean, default: false } })
+const props = defineProps({ isLoading: { type: Boolean, default: false } })
 const store = useTraceStore()
+
+// 支持独立加载模式：优先使用 props，回退到 store
+const effectiveLoading = computed(() => props.isLoading || store.isBehaviorLoading)
 const behaviors = computed(() => store.behaviors)
+const hasError = computed(() => !!store.behaviorError)
 const sigCount = ref(null)
 
 onMounted(async () => {
@@ -94,7 +102,6 @@ function riskIcon(level) {
   return icons[level] || icons.info
 }
 function formatDetails(d) {
-  // 简化 JSON 显示，截断长值
   if (!d) return ''
   const simplify = (obj, depth = 0) => {
     if (depth > 2 || typeof obj !== 'object' || obj === null) return String(obj).slice(0, 80)
@@ -125,6 +132,13 @@ function formatDetails(d) {
   background: rgba(63,185,80,.04); border: 1px solid rgba(63,185,80,.1); border-radius: 6px;
 }
 .bp-ok { font-weight: bold; }
+
+/* Error */
+.bp-error {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 14px 8px; color: #f85149; font-size: 11.5px;
+  background: rgba(248,81,73,.04); border: 1px solid rgba(248,81,73,.15); border-radius: 6px;
+}
 
 /* Loading */
 .bp-loading {

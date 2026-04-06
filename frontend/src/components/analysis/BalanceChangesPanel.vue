@@ -10,9 +10,19 @@
     </div>
 
     <!-- 无数据 -->
-    <div v-if="!changes.length" :class="['bcp-body', { 'bcp-collapsed': !expanded }]">
-      <div class="bcp-empty">
+    <div v-if="!effectiveChanges.length && !isLoading" :class="['bcp-body', { 'bcp-collapsed': !expanded }]">
+      <div class="bcp-empty" v-if="!hasError">
         <span>&#128270;</span> No balance changes detected
+      </div>
+      <div class="bcp-error" v-else>
+        <span>&#9888;</span> {{ store.balanceError }}
+      </div>
+    </div>
+
+    <!-- 加载中 -->
+    <div v-else-if="isLoading" :class="['bcp-body', { 'bcp-collapsed': !expanded }]">
+      <div class="bcp-loading">
+        <span class="bp-spin">&#8635;</span> Computing balance changes...
       </div>
     </div>
 
@@ -110,10 +120,20 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
+import { useTraceStore } from '@/stores/traceAnalysis.js'
 
 const props = defineProps({
   changes: { type: Array, default: () => [] },
 })
+
+// 支持独立加载模式：未传入 changes 时，从 store 获取数据
+const store = useTraceStore()
+const effectiveChanges = computed(() => {
+  if (props.changes && props.changes.length > 0) return props.changes
+  return store.balanceChanges
+})
+const isLoading = computed(() => props.changes ? false : store.isBalanceLoading)
+const hasError = computed(() => props.changes ? false : !!store.balanceError)
 
 const expanded = ref(true)
 const copyNotice = ref(false)
@@ -158,8 +178,10 @@ async function copyToClipboard(text) {
 
 // 按地址分组
 const groupedData = computed(() => {
+  const changes = effectiveChanges.value
   const groups = {}
-  for (const c of props.changes) {
+  for (let i = 0; i < changes.length; i++) {
+    const c = changes[i]
     const addr = c.address?.toLowerCase() || ''
     if (!groups[addr]) {
       groups[addr] = { label: '', labelFull: '', rows: [], totalNet: 0 }
@@ -169,7 +191,10 @@ const groupedData = computed(() => {
   }
 
   // 格式化每个组的地址标签
-  for (const [addr, g] of Object.entries(groups)) {
+  const entries = Object.entries(groups)
+  for (let i = 0; i < entries.length; i++) {
+    const addr = entries[i][0]
+    const g = entries[i][1]
     // 找第一个有 label 的行作为标签
     const firstLabel = g.rows[0]?.addressLabel || ''
     if (firstLabel && firstLabel !== short_addr(addr)) {
@@ -193,7 +218,7 @@ const groupedData = computed(() => {
   return groups
 })
 
-const totalEntries = computed(() => props.changes.length)
+const totalEntries = computed(() => effectiveChanges.value.length)
 
 function isSender(addr) { return false }
 
@@ -232,9 +257,10 @@ function tokenColor(sym) {
 }
 
 function downloadCSV() {
-  if (!props.changes.length) return
+  const changes = effectiveChanges.value
+  if (!changes.length) return
   const headers = ['Address','Label','Token','Token ID','Balance Raw','Balance Formatted','Value USD']
-  const rows = props.changes.map(c => [
+  const rows = changes.map(c => [
     c.address,
     c.addressLabel,
     c.tokenSymbol,
@@ -291,6 +317,20 @@ function downloadCSV() {
 .bcp-empty {
   display: flex; align-items: center; justify-content: center; gap: 6px;
   padding: 20px 8px; color: #484f58; font-size: 11.5px;
+}
+
+/* Loading */
+.bcp-loading {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 20px 8px; color: #8b949e; font-size: 11.5px;
+}
+.bp-spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Error */
+.bcp-error {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 14px 8px; color: #f85149; font-size: 11.5px;
 }
 
 /* ── Table Header ── */

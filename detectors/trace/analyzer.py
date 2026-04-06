@@ -870,15 +870,16 @@ def shorten_addr(addr: str, width: int = 12) -> str:
 
 
 def _format_eth_change(amount_wei: int) -> str:
-    """格式化 ETH 余额变化, 如 '+13.9000' 或 '-2,305.4277'"""
+    """格式化 ETH 余额变化, 如 '+13.9000' 或 '+1,211.0544'"""
     if amount_wei == 0:
         return "0"
     divisor = 1e18
     val = abs(amount_wei) / divisor
+    # 使用千分位逗号分隔，不进行额外的数量级缩放（避免差 1000x 的错误）
     if val >= 1e6:
-        s = f"{val / 1e6:,.4f}"
+        s = f"{val:,.4f}"
     elif val >= 1e3:
-        s = f"{val / 1e3:,.4f}"
+        s = f"{val:,.4f}"
     else:
         s = f"{val:.4f}"
     prefix = "+" if amount_wei > 0 else "-"
