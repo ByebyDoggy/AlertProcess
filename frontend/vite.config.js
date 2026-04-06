@@ -35,6 +35,10 @@ export default defineConfig({
           if (req.url === '/knowledge-base') return '/index.html'
         },
       },
+      '/detectors': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from routers import alertRouter
 from routers.rule_chain.router import ruleChainRouter
 from routers.knowledge_base import knowledgeBaseRouter
+from routers.detectors import trace_router
 from database.models import SessionLocal
 from config import settings
 import os
@@ -37,6 +38,7 @@ async def health_check():
 app.include_router(alertRouter)
 app.include_router(ruleChainRouter)
 app.include_router(knowledgeBaseRouter)
+app.include_router(trace_router)
 
 
 # ──────────────── 启动时加载预置知识库样本 ────────────────
@@ -96,7 +98,7 @@ if os.path.isdir(frontend_dist):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """SPA fallback: 返回 index.html 对所有非 API 路径"""
-        if full_path.startswith(("alert", "rule-chain")):
+        if full_path.startswith(("alert", "rule-chain", "knowledge-base", "detectors")):
             return {"detail": "Not Found"}
         file_path = os.path.join(frontend_dist, full_path)
         if os.path.isfile(file_path):

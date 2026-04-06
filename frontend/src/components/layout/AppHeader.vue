@@ -23,8 +23,9 @@
 
 <script setup>
 const navItems = [
-  { path: '/rule-chain', label: '规则链编辑器', icon: '\u26A1' },
-  { path: '/knowledge-base', label: '知识库', icon: '\uD83D\uDCDA' },
+  { path: '/rule-chain', label: 'Rule Chain Editor', icon: '\u26A1' },
+  { path: '/knowledge-base', label: 'Knowledge Base', icon: '\uD83D\uDCDA' },
+  { path: '/chain-analysis', label: 'Chain Analysis', icon: '\uD83D\uDD0E' },
 ]
 </script>
 

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import RuleChainEditor from './views/RuleChainEditor.vue'
 import KnowledgeBase from './views/KnowledgeBase.vue'
+import ChainAnalysis from './views/ChainAnalysis.vue'
 
 const routes = [
   {
@@ -16,6 +17,12 @@ const routes = [
     path: '/knowledge-base',
     name: 'KnowledgeBase',
     component: KnowledgeBase,
+  },
+  {
+    path: '/chain-analysis',
+    name: 'ChainAnalysis',
+    component: ChainAnalysis,
+    meta: { title: 'Chain Analysis' }
   },
 ]
 
