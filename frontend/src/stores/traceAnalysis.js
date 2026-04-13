@@ -34,6 +34,7 @@ export const useTraceStore = defineStore('traceAnalysis', {
 
     // Fund Flow (BlockSec-style diagram data)
     _fundFlowData: null,       // internal state { transfers: [...] }
+    callTransfersData: [],     // raw call transfers from backend (transfer function calls in call tree)
 
     // Behaviors
     behaviorsData: [],        // behaviors[]
@@ -156,6 +157,9 @@ export const useTraceStore = defineStore('traceAnalysis', {
       // 等待全部完成（无论成功失败），用于判断整体状态
       await Promise.allSettled(promises)
 
+      // 合并 callTransfers(函数调用) + tokenFlows(事件) 构建完整 Fund Flow 图
+      this._buildMergedFundFlow()
+
       // Call Tree 加载完成后自动展开第一层
       if (this.callTreeData?.root?.children) {
         this.expandedNodes.add(this._nodeKey(this.callTreeData.root))
@@ -183,9 +187,16 @@ export const useTraceStore = defineStore('traceAnalysis', {
       try {
         const data = await fetchBalanceChanges(hash, cid)
         this.balanceChangesData = data.balanceChanges || []
+        this.callTransfersData = data.callTransfers || []
         console.log(`[TraceStore] Balance changes loaded: ${this.balanceChangesData.length} entries`)
-        // Build fund flow diagram from balance changes data
-        this._buildFundFlowFromBalanceChanges(this.balanceChangesData)
+        console.log(`[TraceStore] Call transfers loaded: ${this.callTransfersData.length} transfers`)
+        // Build fund flow diagram from call transfers (preferred, has ordered from/to/amount)
+        if (this.callTransfersData && this.callTransfersData.length > 0) {
+          this._buildFundFlowFromCallTransfers(this.callTransfersData)
+        } else {
+          // Fallback to balance changes aggregation
+          this._buildFundFlowFromBalanceChanges(this.balanceChangesData)
+        }
       } catch (e) {
         this.balanceError = e.message || 'Balance changes failed'
         console.warn('[TraceStore] Balance changes error:', e)
@@ -276,6 +287,105 @@ export const useTraceStore = defineStore('traceAnalysis', {
       console.log('[TraceStore] Fund flow built:', transfers.length, 'transfers from', changes.length, 'balance changes')
     },
 
+    /**
+     * 合并 callTransfers(函数调用) + tokenFlows(事件) 构建完整 Fund Flow
+     *
+     * 数据源:
+     *   - callTransfers: transfer()/transferFrom() 等函数调用 (有 from/to/amount)
+     *   - tokenFlows:    Transfer 事件日志 (含 mint 零地址来源等非调用触发的转移)
+     *
+     * 合并策略:
+     *   1) 先用 tokenFlows 构建（包含所有 Transfer 事件，含零地址 mint 来源）
+     *   2) 再补充 callTransfers 中独有的条目（用 from+to+token+amount 去重）
+     */
+    _buildMergedFundFlow() {
+      var tf = this.tokenFlowsData || []
+      var ct = this.callTransfersData || []
+
+      if (!tf.length && !ct.length) {
+        this._fundFlowData = null
+        return
+      }
+
+      var transfers = []
+      var idCounter = 1
+
+      // 去重集合: key = "from|to|token|amount"
+      var seenKeys = {}
+
+      function addTransfer(item, source) {
+        var key = (item.from || '') + '|' + (item.to || '') + '|' + (item.token || '') + '|' + item.amount
+        if (seenKeys[key]) return false
+        seenKeys[key] = true
+        transfers.push({
+          id: idCounter++,
+          from: item.from,
+          to: item.to,
+          amount: item.amount,
+          token: item.token,
+          tokenSymbol: item.tokenSymbol,
+          tokenType: item.tokenType || 1,
+          isReverted: false,
+        })
+        return true
+      }
+
+      // 1) 从 tokenFlows 构建（Transfer 事件，包含零地址 mint 来源等）
+      for (var ti = 0; ti < tf.length; ti++) {
+        var f = tf[ti]
+        addTransfer({
+          from: (f.fromAddress || '').toLowerCase(),
+          to: (f.toAddress || '').toLowerCase(),
+          amount: f.amountFormatted || String(f.amountRaw || 0),
+          token: f.tokenAddress || '',
+          tokenSymbol: f.tokenSymbol || 'UNKNOWN',
+        }, 'event')
+      }
+
+      // 2) 从 callTransfers 补充独有的函数调用转账（自动跳过重复项）
+      for (var ci = 0; ci < ct.length; ci++) {
+        var c = ct[ci]
+        addTransfer({
+          from: (c.fromAddress || '').toLowerCase(),
+          to: (c.toAddress || '').toLowerCase(),
+          amount: c.amountFormatted || String(c.amount || 0),
+          token: c.tokenAddress || '',
+          tokenSymbol: c.tokenSymbol || 'Unknown',
+          tokenType: c.tokenAddress ? 1 : 0,
+        }, 'call')
+      }
+
+      this._fundFlowData = { transfers: transfers }
+      console.log('[TraceStore] Merged fund flow:', transfers.length, 'transfers (' + tf.length + ' events +', ct.length, ' calls)')
+    },
+    _buildFundFlowFromCallTransfers(callTransfers) {
+      if (!callTransfers || !callTransfers.length) { this._fundFlowData = null; return }
+
+      var transfers = []
+      for (var i = 0; i < callTransfers.length; i++) {
+        var ct = callTransfers[i]
+        // token address: empty string for ETH, otherwise use tokenAddress
+        var tokenAddr = ct.tokenAddress || ''
+        // For ETH transfers (value > 0, no token contract), use empty string as ETH key
+        if (!tokenAddr && ct.value && parseInt(ct.value) > 0) {
+          tokenAddr = ''
+        }
+        transfers.push({
+          id: ct.orderId || (i + 1),
+          from: (ct.fromAddress || '').toLowerCase(),
+          to: (ct.toAddress || '').toLowerCase(),
+          amount: String(ct.amount || 0),
+          token: tokenAddr,
+          tokenSymbol: ct.tokenSymbol || (tokenAddr === '' ? 'ETH' : 'Unknown'),
+          tokenType: tokenAddr === '' ? 0 : 1,
+          isReverted: false,
+        })
+      }
+
+      this._fundFlowData = transfers.length > 0 ? { transfers: transfers } : null
+      console.log('[TraceStore] Fund flow built from call transfers:', transfers.length, 'transfers')
+    },
+
     async _loadBehaviors(hash, cid) {
       this.isBehaviorLoading = true
       this.behaviorError = null
@@ -296,6 +406,7 @@ export const useTraceStore = defineStore('traceAnalysis', {
       this.callTreeData = null
       this.balanceChangesData = []
       this.tokenFlowsData = []
+      this.callTransfersData = []
       this._fundFlowData = null
       this.behaviorsData = []
       this.protocolsData = []

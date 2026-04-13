@@ -26,6 +26,7 @@ const navItems = [
   { path: '/rule-chain', label: 'Rule Chain Editor', icon: '\u26A1' },
   { path: '/knowledge-base', label: 'Knowledge Base', icon: '\uD83D\uDCDA' },
   { path: '/chain-analysis', label: 'Chain Analysis', icon: '\uD83D\uDD0E' },
+  { path: '/pool-config', label: 'Pool Config', icon: '\u2699' },
 ]
 </script>
 

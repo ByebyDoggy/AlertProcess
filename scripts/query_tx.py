@@ -1,10 +1,25 @@
 """
 查询交易并输出分析结果到文件 - 补充地址识别
+(使用 apipool-ng 封装的 RPC 客户端, 支持多节点自动轮换)
 """
+import asyncio
 import json
-from web3 import Web3
+import sys
+import os
 
-RPC_URL = "https://ethereum-rpc.publicnode.com"
+# 确保项目根目录在 sys.path 中
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from detectors.trace.rpc_pool import RpcEndpointApiKey, AsyncRpcPoolManager
+from detectors.trace.provider import CHAIN_META
+
+# 配置: 使用 ETH 主网公共 RPC 节点 (通过 apipool-ng 自动轮换)
+RPC_URLS = [
+    "https://ethereum-rpc.publicnode.com",
+    "https://rpc.ankr.com/eth",
+    "https://eth.llamarpc.com",
+]
+CHAIN_ID = 1
 TX_HASH = "0xc310a0affe2169d1f6feec1c63dbc7f7c62a887fa48795d327d4d2da2d6b111d"
 OUTPUT_FILE = r"D:\Programming\Python\AlertProcessor\scripts\trace_result.txt"
 
@@ -123,52 +138,107 @@ def decode_transfer_amounts(input_data) -> dict | None:
     return None
 
 
-def main():
-    w3 = Web3(Web3.HTTPProvider(RPC_URL))
+async def main():
+    # ── 创建 apipool-ng RPC 池 (自动轮换多个节点) ──
+    endpoints = [
+        RpcEndpointApiKey(url=url, chain_id=CHAIN_ID)
+        for url in RPC_URLS
+    ]
+    pool = AsyncRpcPoolManager(endpoints=endpoints, chain_id=CHAIN_ID)
+
     lines = []
 
     def p(text=""):
         lines.append(text)
 
-    assert w3.is_connected(), f"Cannot connect to {RPC_URL}"
+    # 测试连通性
+    p(f"[*] Testing connectivity via {len(RPC_URLS)} RPC nodes (apipool-ng)...")
+    try:
+        chain_id_result = await pool.call("eth_chainId", [], request_id=1)
+        expected = hex(CHAIN_ID)
+        if isinstance(chain_id_result, str) and chain_id_result.lower() == expected.lower():
+            p(f"[+] Connected! Chain ID: {chain_id_result}")
+        else:
+            p(f"[!] Chain ID mismatch: got {chain_id_result}, expected {expected}")
+            # 继续执行, 可能是公共节点返回格式不同
+    except Exception as e:
+        p(f"[!] Connection failed: {e}")
+        await pool.close_all()
+        return
 
-    receipt = w3.eth.get_transaction_receipt(TX_HASH)
-    tx = w3.eth.get_transaction(TX_HASH)
+    # ── 获取交易收据 (eth_getTransactionReceipt) ──
+    receipt_raw = await pool.call("eth_getTransactionReceipt", [TX_HASH], request_id=2)
+
+    # ── 获取交易详情 (eth_getTransactionByHash) ──
+    tx_raw = await pool.call("eth_getTransactionByHash", [TX_HASH], request_id=3)
+
+    # Web3 风格的辅助函数 (替代 w3.from_wei 等)
+    def from_wei(value, unit='ether'):
+        """将 wei 转换为指定单位"""
+        value = int(value, 16) if isinstance(value, str) else int(value)
+        units = {'gwei': 1e9, 'ether': 1e18}
+        return value / units.get(unit, 1e18)
+
+    def to_int(hex_str):
+        """十六进制字符串转整数"""
+        return int(hex_str, 16) if isinstance(hex_str, str) else int(hex_str)
+
+    receipt = receipt_raw  # dict from JSON-RPC
+    tx = tx_raw          # dict from JSON-RPC
 
     p("=" * 70)
     p(f"  TRANSACTION ANALYSIS: {TX_HASH}")
+    p(f"  (Powered by apipool-ng RPC Pool Manager)")
     p("=" * 70)
 
-    # === Basic Info ===
+    # === Basic Info (JSON-RPC dict 格式) ===
     p(f"\n--- Basic Info ---")
-    p(f"  Status:    {'SUCCESS' if receipt.status == 1 else 'FAILED'}")
-    p(f"  Block:     #{receipt.blockNumber}")
-    p(f"  From:      {tx['from']}")
-    p(f"  To:        {tx.to}  {get_protocol(tx.to) or ''}")
-    p(f"  Value:     {w3.from_wei(tx.value, 'ether')} ETH")
-    p(f"  Gas Used:  {receipt.gasUsed:,} / {tx.gas:,}")
-    p(f"  Gas Price: {w3.from_wei(tx.gasPrice, 'gwei')} gwei")
-    p(f"  TxFee:     {w3.from_wei(receipt.gasUsed * tx.gasPrice, 'ether')} ETH")
-    input_hex = to_hex(tx.input)
-    sig = resolve_selector(input_hex)
-    p(f"  Selector:  {input_hex[:10]} {f'-> {sig}' if sig else '-> UNKNOWN (0x863df1ab likely fallback or proxy)'}")
+    status = to_int(receipt.get("status", "0x0"))
+    block_num = to_int(receipt.get("blockNumber", "0x0"))
+    tx_from = tx.get("from", "")
+    tx_to = tx.get("to", "")
+    tx_value = to_int(tx.get("value", "0x0"))
+    gas_used = to_int(receipt.get("gasUsed", "0x0"))
+    gas_limit = to_int(tx.get("gas", "0x0"))
+    gas_price = to_int(tx.get("gasPrice", "0x0") or tx.get("effectiveGasPrice", "0x0"))
 
-    # === Traces ===
-    result = w3.provider.make_request("trace_transaction", [TX_HASH])
-    trace_list = result.get("result", [])
+    p(f"  Status:    {'SUCCESS' if status == 1 else 'FAILED'}")
+    p(f"  Block:     #{block_num}")
+    p(f"  From:      {tx_from}")
+    p(f"  To:        {tx_to}  {get_protocol(tx_to) or ''}")
+    p(f"  Value:     {from_wei(tx_value, 'ether')} ETH")
+    p(f"  Gas Used:  {gas_used:,} / {gas_limit:,}")
+    p(f"  Gas Price: {from_wei(gas_price, 'gwei')} gwei")
+    p(f"  TxFee:     {from_wei(gas_used * gas_price, 'ether')} ETH")
+
+    input_hex = to_hex(tx.get("input", "0x"))
+    sig = resolve_selector(input_hex)
+    p(f"  Selector:  {input_hex[:10]} {f'-> {sig}' if sig else '-> UNKNOWN (fallback or proxy)'}")
+
+    # === Traces (通过 apipool-ng 池直接调用 trace_transaction) ===
+    p(f"\n[*] Fetching trace via apipool-ng pool...")
+    try:
+        trace_result = await pool.call("trace_transaction", [TX_HASH], request_id=4)
+        trace_list = trace_result.get("result", [])
+        p(f"[+] Got {len(trace_list)} traces")
+    except Exception as e:
+        p(f"[!] Trace not available (may need archive node): {e}")
+        trace_list = []
 
     p(f"\n--- Trace Summary ---")
     p(f"  Total traces: {len(trace_list)}")
 
-    # Analyze all transfers
+    # Analyze all transfers (JSON-RPC format: logs is list of dicts)
     transfers = []
-    for i, log in enumerate(receipt.logs):
-        topics = [to_hex(t) for t in log.topics]
+    logs_list = receipt.get("logs", [])
+    for i, log in enumerate(logs_list):
+        topics = [to_hex(t) for t in (log.get("topics") or [])]
         if len(topics) >= 3 and topics[0] == TRANSFER_TOPIC:
             from_a = "0x" + topics[1][26:]
             to_a = "0x" + topics[2][26:]
-            amount = int.from_bytes(log.data, 'big') if log.data else 0
-            addr = to_hex(log.address).lower()
+            data_raw = log.get("data", "0x")
+            amount = int(data_raw, 16) if len(data_raw) >= 3 else 0
+            addr = to_hex(log.get("address", "")).lower()
             transfers.append({
                 "token": addr,
                 "protocol": get_protocol(addr),
@@ -186,9 +256,9 @@ def main():
         name = t["protocol"] or t["token"][:10] + "..."
         token_net[name]["details"].append(t)
         # from perspective of tx.to (the main contract executing the tx)
-        if t["from"] == to_hex(tx.to).lower():
+        if t["from"] == to_hex(tx_to).lower():
             token_net[name]["out"] += t["amount"]
-        if t["to"] == to_hex(tx.to).lower():
+        if t["to"] == to_hex(tx_to).lower():
             token_net[name]["in"] += t["amount"]
 
     for name, flow in token_net.items():
@@ -305,7 +375,7 @@ def main():
     p(f"=" * 70)
     p(f"""
   Transaction: 0xc310a0af...6b111d
-  Block:       #{receipt.blockNumber}
+  Block:       #{block_num}
   Type:        Likely FLASH LOAN + ARBITRAGE via 1inch + Aave V3
 
   Execution Flow:
@@ -342,4 +412,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

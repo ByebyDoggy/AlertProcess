@@ -54,7 +54,9 @@ AlertProcessor/
 │   └── models.py                    # SQLAlchemy ORM（AlertDB, RuleChainDB 等）
 ├── routers/                         # API 路由
 │   ├── rule_chain/router.py         # 规则链 CRUD + Schema + 校验 + 测试运行
-│   └── knowledge_base/              # 知识库 CRUD + 搜索 + 导入导出
+│   ├── knowledge_base/              # 知识库 CRUD + 搜索 + 导入导出
+│   ├── detectors/                   # 交易分析 + 日志接收
+│   └── pool_config/                 # Pool 配置管理 (apipool-server)
 ├── data/                            # 预置数据
 │   └── sample_alerts.json           # 知识库预置样本
 ├── frontend/                        # Vue 3 前端
@@ -96,6 +98,13 @@ pip install -r requirements.txt
 api_key=your-secret-api-key
 moralis_api_key=your-moralis-api-key
 arkm_cookie=your-arkm-cookie
+
+# apipool-server 配置 (RPC 调用统一由 apipool-server 管理)
+apipool_server_url=http://localhost:8000
+apipool_username=your-username
+apipool_password=your-password
+# 每条链的 pool_identifier (JSON 格式)
+apipool_pool_map={"1":"ethereum-rpc","56":"bsc-rpc","137":"polygon-rpc"}
 ```
 
 ### 3. 启动后端
@@ -279,6 +288,20 @@ Action 节点在 dry-run 模式下仅模拟执行，不会产生实际副作用�
 | `POST` | `/knowledge-base/import` | 批量导入 |
 | `GET` | `/knowledge-base/export/all` | 导出全部 |
 | `GET` | `/knowledge-base/meta/categories` | 获取预设分类列表 |
+
+### Pool 配置管理 (apipool-server)
+
+所有 RPC 调用统一由 apipool-server 管理，每条链使用独立的 `pool_identifier`。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/pool-config/` | 获取所有链的 pool 配置 |
+| `GET` | `/pool-config/chains` | 支持的链列表 |
+| `GET` | `/pool-config/status` | 池运行状态 |
+| `PUT` | `/pool-config/{chain_id}` | 更新链的 pool_identifier |
+| `POST` | `/pool-config/health-check` | 健康检查 |
+| `POST` | `/pool-config/reload` | 重新加载配置 |
+| `POST` | `/pool-config/test-connection` | 测试 RPC URL 连通性 |
 
 ## 引擎架构
 

@@ -27,7 +27,7 @@ class AlertDB(Base):
     severity = Column(Enum(SeverityEnum), default=SeverityEnum.UNKNOWN)
     message = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.now)
-    risk_score = Column(String, nullable=True, default="PENDING")  # 新增字段用于存储可信度评分
+    risk_score = Column(String, nullable=True, default="PENDING")
 
 
 class ContractAddressDB(Base):

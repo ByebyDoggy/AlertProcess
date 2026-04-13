@@ -29,13 +29,13 @@
     <!-- Empty state -->
     <div v-if="showEmpty" class="ffp-empty-state">
       <svg class="ffp-empty-icon" viewBox="0 0 48 48" fill="none" stroke="#4a5568" stroke-width="1.5"><circle cx="24" cy="24" r="20"/><path d="M16 24h16M24 16v16" opacity=".4"/></svg>
-      <span>No fund flow data available</span>
+      <span>No transfer calls found in this transaction</span>
     </div>
 
     <!-- Loading -->
     <div v-else-if="isLoadingState" class="ffp-loading">
       <div class="ffp-spinner"></div>
-      <span>Analyzing fund flows...</span>
+      <span>Extracting transfer calls...</span>
     </div>
 
     <!-- Error -->
@@ -90,8 +90,8 @@ export default {
     var store = useTraceStore()
 
     /* ═══════════════════════ CONSTANTS ═══════════════════════ */
-    var NODE_W = 220, NODE_H = 68
-    var COL_GAP = 400, ROW_GAP = 100, MARGIN = 80
+    var NODE_W = 200, NODE_H = 72
+    var COL_GAP = 420, ROW_GAP = 90, MARGIN = 80
     var PALETTE = [
       '#3b82f6', '#8b5cf6', '#06b6d4', '#10b981',
       '#f59e0b', '#ef4444', '#6366f1', '#ec4899',
@@ -112,7 +112,6 @@ export default {
     var nodeElements = null
     var edgeElements = null
     var labelElements = null
-    var flowElements = null
     var gridGroup = null
     var currentTransform = d3.zoomIdentity
 
@@ -144,7 +143,7 @@ export default {
     var hasTransfersData = computed(function() { return rawTransfers.value.length > 0 })
     var showEmpty = computed(function() { return !hasTransfersData.value && !isLoadingState.value })
 
-    /* ═══════════════════ TOKEN HELPERS ═══════════════════ */
+    /* ═══════════════════════ TOKEN HELPERS ═══════════════════ */
     function tokenSym(t) {
       if (t.token === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') return 'ETH'
       if (t.tokenSymbol) return t.tokenSymbol
@@ -191,19 +190,22 @@ export default {
 
     /* ═══════════════════ GRAPH DATA BUILDERS ═══════════════════ */
 
-    /** Build nodes array from transfers using topological sort for layering */
+    /** Build nodes array using topological sort — BlockSec style with role detection */
     function buildNodes(transfers) {
       if (!transfers.length) return []
       var nm = {}, inD = {}, outE = {}
       function ensure(a) {
         if (!nm[a]) { nm[a] = { id: a, address: a, fullAddress: a, layer: -1, inCnt: 0, outCnt: 0 }; inD[a] = 0; outE[a] = [] }
       }
+      // Collect all unique addresses and count edges
       for (var i = 0; i < transfers.length; i++) {
         ensure(transfers[i].from); ensure(transfers[i].to)
         nm[transfers[i].from].outCnt++; nm[transfers[i].to].inCnt++
-        outE[transfers[i].from].push(transfers[i].to); inD[transfers[i].to]++
+        if (outE[transfers[i].from].indexOf(transfers[i].to) === -1)
+          outE[transfers[i].from].push(transfers[i].to)
+        inD[transfers[i].to]++
       }
-      // BFS topological sort for layers
+      // BFS topological sort
       var q = [], keys = Object.keys(nm)
       for (var i = 0; i < keys.length; i++) { if (inD[keys[i]] === 0) { q.push(keys[i]); nm[keys[i]].layer = 0 } }
       var qi = 0
@@ -217,22 +219,47 @@ export default {
       for (var i = 0; i < keys.length; i++) { if (nm[keys[i]].layer > mL) mL = nm[keys[i]].layer }
       for (var i = 0; i < keys.length; i++) { if (nm[keys[i]].layer < 0) nm[keys[i]].layer = mL + 1 }
 
-      // Compute visual properties
+      // Compute visual properties per node
       var placed = []
       for (var i = 0; i < keys.length; i++) {
         var n = nm[keys[i]]
+        // Role: pure sender (only outgoing), pure receiver (only incoming), or intermediary (both)
         n.roleLabel = n.outCnt > 0 && n.inCnt === 0 ? 'Sender' : (n.inCnt > 0 && n.outCnt === 0 ? 'Receiver' : '')
         n.shortAddr = keys[i].length > 12 ? keys[i].slice(0, 8) + '..' + keys[i].slice(-4) : keys[i]
-        var h = 0, alen = Math.min(keys[i].length, 10), hues = ['#6366f1','#8b5cf6','#ec4899','#f43f5e','#f97316','#eab308','#22c55e','#14b8a6','#06b6d4','#3b82f6']
-        for (var k = 0; k < alen; k++) h = keys[i].charCodeAt(k) + ((h << 5) - h)
-        n.avatarColor = hues[Math.abs(h) % hues.length]
+        n.displayLabel = _getNodeLabel(keys[i])
+        var h = 0
+        for (var k = 0; k < Math.min(keys[i].length, 10); k++) h = keys[i].charCodeAt(k) + ((h << 5) - h)
+        n.avatarColor = ['#6366f1','#8b5cf6','#ec4899','#f43f5e','#f97316','#eab308','#22c55e','#14b8a6','#06b6d4','#3b82f6'][Math.abs(h) % 10]
         n.avatarLetter = keys[i].slice(2, 4).toUpperCase()
         placed.push(n)
       }
       return placed
     }
 
-    /** Build edges array from transfers with D3-compatible structure */
+    /** Resolve display label for an address — tries protocol registry info */
+    function _getNodeLabel(addr) {
+      // Check store for protocol labels
+      var root = store.root
+      if (root) {
+        var found = _findNodeByAddr(root, addr)
+        if (found && found.label) return found.label
+        if (found && found.tokenSymbol) return found.tokenSymbol
+      }
+      // Default to short address
+      return addr.length > 10 ? addr.slice(0, 6) + '..' + addr.slice(-4) : addr
+    }
+
+    function _findNodeByAddr(node, addr) {
+      var target = addr.toLowerCase()
+      if (node.to_address && node.to_address.toLowerCase() === target) return node
+      for (var i = 0; i < node.children.length; i++) {
+        var found = _findNodeByAddr(node.children[i], addr)
+        if (found) return found
+      }
+      return null
+    }
+
+    /** Build edges array from transfers */
     function buildEdges(transfers, nodeMap) {
       if (!transfers.length || !nodeMap) return []
       var edges = []
@@ -248,7 +275,7 @@ export default {
           to: tr.to,
           amount: tr.amount,
           token: tr.token,
-          color: tkColor(tr.token)
+          color: tkColor(tr.token),
         })
       }
       return edges
@@ -266,7 +293,11 @@ export default {
     }
 
     /* ═══════════════════ HELPERS ═══════════════════ */
-    function roleBadgeColor(r) { if (r === 'Sender') return '#3b82f6'; if (r === 'Receiver') return '#a78bfa'; return '#6b7280' }
+    function roleBadgeColor(r) { 
+      if (r === 'Sender') return '#3b82f6'; 
+      if (r === 'Receiver') return '#ec4899';
+      return '#6b7280' 
+    }
 
     function fmtAmt(raw) {
       if (!raw) return '0'; var s = String(raw), num = parseFloat(s.replace(/,/g, ''))
@@ -293,20 +324,20 @@ export default {
         .attr('height', h)
         .attr('viewBox', '0 0 ' + w + ' ' + h)
 
-      // Defs: markers, filters
+      // Defs: markers, filters, gradients
       var defs = svg.append('defs')
 
       // Arrow markers per token color
       defs.append('marker')
         .attr('id', 'arrow-default')
         .attr('markerUnits', 'userSpaceOnUse')
-        .attr('markerWidth', 18)
-        .attr('markerHeight', 14)
-        .attr('refX', 16)
-        .attr('refY', 7)
+        .attr('markerWidth', 16)
+        .attr('markerHeight', 12)
+        .attr('refX', 14)
+        .attr('refY', 6)
         .attr('orient', 'auto')
         .append('path')
-        .attr('d', 'M 0 1 L 18 7 L 0 13 L 5 7 z')
+        .attr('d', 'M 0 1 L 16 6 L 0 11 L 4 6 z')
         .attr('fill', '#6b7280')
 
       var tcl = tokenColorList.value
@@ -314,29 +345,29 @@ export default {
         defs.append('marker')
           .attr('id', 'arrow-' + tcl[ti].idx)
           .attr('markerUnits', 'userSpaceOnUse')
-          .attr('markerWidth', 18)
-          .attr('markerHeight', 14)
-          .attr('refX', 16)
-          .attr('refY', 7)
+          .attr('markerWidth', 16)
+          .attr('markerHeight', 12)
+          .attr('refX', 14)
+          .attr('refY', 6)
           .attr('orient', 'auto')
           .append('path')
-          .attr('d', 'M 0 1 L 18 7 L 0 13 L 5 7 z')
+          .attr('d', 'M 0 1 L 16 6 L 0 11 L 4 6 z')
           .attr('fill', tcl[ti].color)
       }
 
-      // Glow filter
+      // Glow filter for hover highlight
       var glowFilter = defs.append('filter').attr('id', 'glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%')
-      glowFilter.append('feGaussianBlur').attr('stdDeviation', 4).attr('result', 'blur')
+      glowFilter.append('feGaussianBlur').attr('stdDeviation', 3.5).attr('result', 'blur')
       glowFilter.append('feMerge').append('feMergeNode').attr('in', 'blur')
       glowFilter.select('feMerge').append('feMergeNode').attr('in', 'SourceGraphic')
 
       // Node shadow
       var shadowFilter = defs.append('filter').attr('id', 'nShadow').attr('x', '-30%').attr('y', '-30%').attr('width', '160%').attr('height', '160%')
-      shadowFilter.append('feDropShadow').attr('dx', 0).attr('dy', 3).attr('stdDeviation', 5).attr('flood-color', '#000').attr('flood-opacity', 0.4)
+      shadowFilter.append('feDropShadow').attr('dx', 0).attr('dy', 2.5).attr('stdDeviation', 4).attr('flood-color', '#000').attr('flood-opacity', 0.35)
 
       // Label shadow
       var labelShadow = defs.append('filter').attr('id', 'lShadow').attr('x', '-20%').attr('y', '-50%').attr('width', '140%').attr('height', '200%')
-      labelShadow.append('feDropShadow').attr('dx', 0).attr('dy', 2).attr('stdDeviation', 3).attr('flood-color', '#000').attr('flood-opacity', 0.55)
+      labelShadow.append('feDropShadow').attr('dx', 0).attr('dy', 1.5).attr('stdDeviation', 2.5).attr('flood-color', '#000').attr('flood-opacity', 0.45)
 
       // Zoom behavior
       zoom = d3.zoom()
@@ -352,17 +383,17 @@ export default {
       // Main group
       gMain = svg.append('g').attr('class', 'ffp-main-group')
 
-      // Layer 1: Grid dots
+      // Layer 1: Grid dots background
       gridGroup = gMain.append('g').attr('class', 'ffp-grid-layer').attr('pointer-events', 'none')
       renderGrid(w, h)
 
-      // Layer 2: Edges group
+      // Layer 2: Edges
       gMain.append('g').attr('class', 'ffp-edge-layer').attr('pointer-events', 'none')
 
-      // Layer 3: Nodes group
+      // Layer 3: Nodes
       gMain.append('g').attr('class', 'ffp-node-layer')
 
-      // Layer 4: Labels group
+      // Layer 4: Labels
       gMain.append('g').attr('class', 'ffp-label-layer').attr('pointer-events', 'none')
     }
 
@@ -386,51 +417,40 @@ export default {
         .attr('opacity', 0.45)
     }
 
-    /** Render the complete graph with D3 */
+    /** Render the complete graph — BlockSec style */
     function renderGraph() {
       if (!svg || !gMain) return
       var ts = rawTransfers.value
       if (!ts.length) return
 
-      // Stop existing simulation
       if (simulation) {
         simulation.stop()
         simulation = null
       }
 
-      // Build data
+      // Build data structures
       var nodes = buildNodes(ts)
       var nodeMap = {}
       for (var ni = 0; ni < nodes.length; ni++) { nodeMap[nodes[ni].id] = nodes[ni] }
       var edges = buildEdges(ts, nodeMap)
       var nodeEdgeMap = buildNodeEdgeMap(edges)
 
-      // Assign initial positions based on hierarchical layout
       assignInitialPositions(nodes, layoutMode.value)
 
-      // Deep clone nodes for D3 (it mutates objects)
+      // Clone for D3 mutation safety
       var d3Nodes = nodes.map(function(n) { return Object.assign({}, n) })
       var d3Edges = edges.map(function(e) { return Object.assign({}, e) })
-
-      // Rebuild node map for cloned nodes
       var d3NodeMap = {}
       for (var i = 0; i < d3Nodes.length; i++) { d3NodeMap[d3Nodes[i].id] = d3Nodes[i] }
 
-      /* ═══ PARALLEL EDGE OFFSET ALGORITHM ═══
-       * Groups edges by (source, target) pair.
-       * For each group with N>1 edges, assigns:
-       *   - parallelIndex: 0-based ordinal within the group
-       *   - parallelTotal: total count in the group
-       *   - parallelOffset: signed distance from center line (-N/2 .. +N/2)
-       * This allows bezier curves to fan out and labels to avoid overlap.
-       */
+      /* ── Parallel edge offset algorithm ── */
       var parallelGroups = {}
       for (var ei = 0; ei < d3Edges.length; ei++) {
         var pk = d3Edges[ei].from + '||' + d3Edges[ei].to
         if (!parallelGroups[pk]) parallelGroups[pk] = []
         parallelGroups[pk].push(d3Edges[ei])
       }
-      var SPREAD = 36  // pixels between adjacent parallel edges
+      var SPREAD = 38
       var pgKeys = Object.keys(parallelGroups)
       for (var gi = 0; gi < pgKeys.length; gi++) {
         var group = parallelGroups[pgKeys[gi]], gt = group.length
@@ -450,9 +470,7 @@ export default {
       var nodeLayer = gMain.select('.ffp-node-layer')
       var labelLayer = gMain.select('.ffp-label-layer')
 
-      /* ---- EDGES (paths + animated flow overlays) ---- */
-      
-      // Base edge paths — always visible, static arrows
+      /* ---- EDGES ---- */
       edgeElements = edgeLayer.selectAll('.ffp-edge-group')
         .data(d3Edges, function(d) { return d.id })
         .enter()
@@ -460,32 +478,31 @@ export default {
         .attr('class', 'ffp-edge-group')
         .style('cursor', 'pointer')
 
-      // Layer 1: Base visible path (always shows direction)
-      // Use stroke-opacity instead of opacity so marker-end arrow stays fully opaque
+      // Base path (always visible with arrow)
       edgeElements.append('path')
         .attr('class', 'ffp-edge-base')
         .attr('stroke', function(d) { return d.color })
         .attr('stroke-width', 2)
         .attr('fill', 'none')
-        .attr('stroke-opacity', 0.65)
+        .attr('stroke-opacity', 0.55)
         .attr('marker-end', function(d) {
           var ti = tkIdx(d.token)
           return ti >= 0 ? '#arrow-' + ti : '#arrow-default'
         })
 
-      // Layer 2: Glow overlay (hidden by default, shown on hover)
+      // Glow overlay (hidden by default, shown on hover)
       edgeElements.append('path')
         .attr('class', 'ffp-edge-glow')
         .attr('stroke', function(d) { return d.color })
-        .attr('stroke-width', 3)
+        .attr('stroke-width', 2.5)
         .attr('fill', 'none')
         .attr('opacity', 0)
         .attr('filter', 'url(#glow)')
 
-      // Layer 3: Animated particle container group (one group per edge)
-      var particleGroups = edgeElements.append('g').attr('class', 'ffp-particle-group')
+      // Particle container
+      edgeElements.append('g').attr('class', 'ffp-particle-group')
 
-      /* ---- NODES (card-style rectangles) ---- */
+      /* ---- NODES (BlockSec-style cards) ---- */
       nodeElements = nodeLayer.selectAll('.ffp-node-group')
         .data(d3Nodes, function(d) { return d.id })
         .enter()
@@ -497,7 +514,7 @@ export default {
           .on('drag', dragged)
           .on('end', dragEnded))
 
-      // Node card background
+      // Node card background — rounded rectangle
       nodeElements.append('rect')
         .attr('class', 'ffp-node-card')
         .attr('width', NODE_W)
@@ -508,70 +525,90 @@ export default {
         .attr('stroke-width', 1)
         .attr('filter', 'url(#nShadow)')
 
-      // Role badge group (conditional)
+      // Left accent bar (colored strip on left side of card)
+      nodeElements.append('rect')
+        .attr('class', 'ffp-accent-bar')
+        .attr('width', 3)
+        .attr('height', NODE_H)
+        .attr('rx', 1.5)
+        .attr('fill', function(d) { return d.avatarColor })
+        .attr('opacity', 0.85)
+
+      // Role badge group (top-left corner)
       var roleGroups = nodeElements.filter(function(d) { return d.roleLabel })
         .append('g')
-        .attr('transform', 'translate(10, 9)')
+        .attr('transform', 'translate(12, 9)')
 
       roleGroups.append('rect')
-        .attr('width', 52)
-        .attr('height', 18)
-        .attr('rx', 9)
+        .attr('width', function(d) { return (d.roleLabel.length * 7 + 18) })
+        .attr('height', 17)
+        .attr('rx', 8.5)
         .attr('fill', function(d) { return roleBadgeColor(d.roleLabel) })
-        .attr('opacity', 0.12)
+        .attr('opacity', 0.15)
 
       roleGroups.append('text')
-        .attr('x', 26)
-        .attr('y', 13)
+        .attr('x', function(d) { return (d.roleLabel.length * 7 + 18) / 2 })
+        .attr('y', 12)
         .attr('text-anchor', 'middle')
         .attr('fill', function(d) { return roleBadgeColor(d.roleLabel) })
-        .attr('font-size', 9)
+        .attr('font-size', 8.5)
         .attr('font-weight', 700)
-        .text(function(d) { return d.roleLabel })
+        .attr('letter-spacing', '0.3px')
+        .text(function(d) { return d.roleLabel.toUpperCase() })
 
       // Avatar circle
       nodeElements.append('circle')
         .attr('class', 'ffp-avatar')
-        .attr('cx', 24)
-        .attr('cy', 40)
-        .attr('r', 13)
+        .attr('cx', 22)
+        .attr('cy', 42)
+        .attr('r', 12)
         .attr('fill', function(d) { return d.avatarColor })
 
       // Avatar letter
       nodeElements.append('text')
         .attr('class', 'ffp-avatar-letter')
-        .attr('x', 24)
-        .attr('y', 44)
+        .attr('x', 22)
+        .attr('y', 46)
         .attr('text-anchor', 'middle')
         .attr('fill', '#fff')
-        .attr('font-size', 10)
+        .attr('font-size', 9.5)
         .attr('font-weight', 700)
         .text(function(d) { return d.avatarLetter })
 
-      // Address text
+      // Display label (protocol name / contract name)
+      nodeElements.append('text')
+        .attr('class', 'ffp-label-text-d3')
+        .attr('x', 40)
+        .attr('y', 37)
+        .attr('fill', '#e6edf3')
+        .attr('font-size', 11)
+        .attr('font-weight', 600)
+        .attr('font-family', "'Inter', sans-serif")
+        .text(function(d) { return d.displayLabel || d.shortAddr })
+
+      // Address text (smaller, monospace)
       nodeElements.append('text')
         .attr('class', 'ffp-addr-text')
-        .attr('x', 44)
-        .attr('y', 44)
-        .attr('fill', '#8b949e')
-        .attr('font-size', 11)
+        .attr('x', 40)
+        .attr('y', 54)
+        .attr('fill', '#6e7681')
+        .attr('font-size', 9.5)
         .attr('font-family', "'JetBrains Mono', monospace")
-        .attr('font-weight', 500)
         .text(function(d) { return d.shortAddr })
 
       // Tooltip foreignObject
       nodeElements.append('foreignObject')
         .attr('class', 'ffp-tooltip-fo')
-        .attr('x', -40)
-        .attr('y', NODE_H + 8)
-        .attr('width', 300)
-        .attr('height', 28)
+        .attr('x', -30)
+        .attr('y', NODE_H + 6)
+        .attr('width', 280)
+        .attr('height', 26)
         .attr('opacity', 0)
         .append('xhtml:div')
         .attr('xmlns', 'http://www.w3.org/1999/xhtml')
         .html('<div style="display:flex;align-items:center;justify-content:center;height:100%"><span class="ffp-tooltip-text-d3"></span></div>')
 
-      /* ---- EDGE LABELS ---- */
+      /* ---- EDGE LABELS (BlockSec style: [N] amount SYMBOL) ---- */
       labelElements = labelLayer.selectAll('.ffp-label-group')
         .data(d3Edges, function(d) { return d.id })
         .enter()
@@ -597,12 +634,11 @@ export default {
         .attr('y', 1)
         .attr('text-anchor', 'middle')
         .attr('dominant-baseline', 'middle')
-        .attr('font-size', 10.5)
+        .attr('font-size', 10)
         .attr('font-weight', 600)
         .attr("font-family", "Inter, sans-serif")
 
       /* ---- INTERACTION HANDLERS ---- */
-      // Node hover
       nodeElements
         .on('mouseenter', function(event, d) {
           handleNodeHover(d, d3Edges, d3NodeMap, nodeEdgeMap)
@@ -611,7 +647,6 @@ export default {
           handleHoverEnd()
         })
 
-      // Edge hover (on the group, not just labels)
       edgeElements
         .on('mouseenter', function(event, d) {
           event.stopPropagation()
@@ -632,11 +667,10 @@ export default {
           handleHoverEnd()
         })
 
-      /* ── FORCE SIMULATION ── */
+      /* ── FORCE SIMULATION OR HIERARCHICAL ── */
       if (layoutMode.value === 'force') {
         startForceSimulation(d3Nodes, d3Edges, d3NodeMap)
       } else {
-        // Hierarchical: just position and render, no simulation
         updatePositions(d3Nodes, d3Edges, d3NodeMap)
       }
     }
@@ -644,7 +678,6 @@ export default {
     /** Assign initial positions based on layout mode */
     function assignInitialPositions(nodes, mode) {
       if (mode === 'hierarchical') {
-        // Topological layered layout (BFS-based)
         var ly = {}
         for (var i = 0; i < nodes.length; i++) {
           var L = nodes[i].layer
@@ -667,7 +700,6 @@ export default {
           }
         }
       } else {
-        // Force mode: spread initial positions radially
         var cx = 600, cy = 300
         for (var i = 0; i < nodes.length; i++) {
           var angle = (2 * Math.PI * i) / nodes.length
@@ -686,28 +718,26 @@ export default {
         .force('link', d3.forceLink(d3Edges)
           .id(function(d) { return d.id })
           .distance(COL_GAP * 0.85)
-          .strength(0.35))
+          .strength(0.32))
         .force('charge', d3.forceManyBody()
-          .strength(-400)
+          .strength(-380)
           .distanceMax(600))
         .force('center', d3.forceCenter(600, 300))
-        .force('collision', d3.forceCollide().radius(function(d) { return NODE_W / 2 + 30 }).strength(0.8))
-        .force('x', d3.forceX().strength(0.08))
-        .force('y', d3.forceY().strength(0.08))
+        .force('collision', d3.forceCollide().radius(function(d) { return NODE_W / 2 + 28 }).strength(0.8))
+        .force('x', d3.forceX().strength(0.07))
+        .force('y', d3.forceY().strength(0.07))
         .alphaDecay(0.02)
         .velocityDecay(0.45)
         .on('tick', function() {
           updatePositions(d3Nodes, d3Edges, d3NodeMap)
         })
 
-      // Auto-stop after stabilization
       setTimeout(function() {
         if (simulation) {
           simulation.alphaTarget(0).alpha(0.01)
           setTimeout(function() {
             if (simulation) {
               simulation.stop()
-              // Final tick to snap positions
               updatePositions(d3Nodes, d3Edges, d3NodeMap)
             }
           }, 1500)
@@ -724,13 +754,11 @@ export default {
         return 'translate(' + (d.x - NODE_W / 2) + ',' + (d.y - NODE_H / 2) + ')'
       })
 
-      // Update tooltip text positions
       nodeElements.select('.ffp-tooltip-fo span')
         .text(function(d) { return d.fullAddress })
 
       // Update edge paths (bezier curves with parallel-edge separation)
       edgeElements.each(function(edgeData) {
-        // D3 force simulation converts source/target from string IDs to node objects
         var srcId = typeof edgeData.source === 'object' ? edgeData.source.id : edgeData.source
         var dstId = typeof edgeData.target === 'object' ? edgeData.target.id : edgeData.target
         var src = d3NodeMap[srcId]
@@ -738,44 +766,38 @@ export default {
         if (!src || !dst) return
         var el = d3.select(this)
 
-        // Parallel edge offset: separate multiple edges between same node pair
         var pOff = edgeData._pOffset || 0
-        var pTotal = edgeData._pTotal || 1
 
         var sx = src.x + NODE_W / 2, sy = src.y
         var dx = dst.x - NODE_W / 2, dy = dst.y
         var dist = dx - sx
-        var ctrlDist = Math.min(Math.abs(dist) * 0.45, 140)
+        var ctrlDist = Math.min(Math.abs(dist) * 0.44, 135)
         var cp1x = sx + ctrlDist, cp1y = sy
-        var cp2x = dx - ctrlDist * 0.7, cp2y = dy
+        var cp2x = dx - ctrlDist * 0.68, cp2y = dy
 
-        // Offset the control point midY to create curved fan-out for parallel edges
         var baseMidX = (sx + dx) / 2, baseMidY = (sy + dy) / 2
         var midX = baseMidX + pOff * 0.15
         var midY = baseMidY + pOff
 
-        // For edges spanning multiple layers, add extra spread proportional to layer gap
         var layerDiff = Math.abs((src.layer || 0) - (dst.layer || 0))
-        if (layerDiff > 1 && pTotal > 1) {
-          var extraPush = (layerDiff - 1) * 25
-          midY += (pOff > 0 ? 1 : -1) * extraPush * 0.5
+        if (layerDiff > 1 && (edgeData._pTotal || 1) > 1) {
+          var extraPush = (layerDiff - 1) * 24
+          midY += (pOff > 0 ? 1 : -1) * extraPush * 0.48
         }
 
-        // Arrow gap: shorten the line significantly so arrow tip sits well outside target node border
-        var ARROW_GAP = 18
+        var ARROW_GAP = 17
         var angle = Math.atan2(dy - midY, dx - midX)
         var ex = dx - ARROW_GAP * Math.cos(angle), ey = dy - ARROW_GAP * Math.sin(angle)
 
         var pathD = 'M' + sx.toFixed(1) + ',' + sy.toFixed(1) +
-          ' C' + cp1x.toFixed(1) + ',' + (cp1y + pOff * 0.3).toFixed(1) +
+          ' C' + cp1x.toFixed(1) + ',' + (cp1y + pOff * 0.28).toFixed(1) +
           ' ' + midX.toFixed(1) + ',' + midY.toFixed(1) +
-          ' ' + cp2x.toFixed(1) + ',' + (cp2y + pOff * 0.3).toFixed(1) +
+          ' ' + cp2x.toFixed(1) + ',' + (cp2y + pOff * 0.28).toFixed(1) +
           ' L' + ex.toFixed(1) + ',' + ey.toFixed(1)
 
         el.select('.ffp-edge-base').attr('d', pathD)
         el.select('.ffp-flow-line').attr('d', pathD)
 
-        // Arrow marker on carrier path
         var ti = tkIdx(edgeData.token)
         var markerId = ti >= 0 ? '#arrow-' + ti : '#arrow-default'
         el.select('.ffp-arrow-carrier')
@@ -783,7 +805,7 @@ export default {
           .attr('marker-end', markerId)
       })
 
-      // Update label positions (with parallel-edge offset separation)
+      // Update label positions
       labelElements.each(function(edgeData) {
         var srcId = typeof edgeData.source === 'object' ? edgeData.source.id : edgeData.source
         var dstId = typeof edgeData.target === 'object' ? edgeData.target.id : edgeData.target
@@ -796,20 +818,20 @@ export default {
 
         var sx = src.x + NODE_W / 2, sy = src.y
         var dx = dst.x - NODE_W / 2, dy = dst.y
-        // Label sits at the midpoint of the curve, offset by the parallel spread
-        var lx = (sx + dx) / 2 + pOff * 0.1
-        var ly = (sy + dy) / 2 - 16 + pOff * 0.9
+        var lx = (sx + dx) / 2 + pOff * 0.08
+        var ly = (sy + dy) / 2 - 15 + pOff * 0.88
         if (ly < 30) ly = 30
 
-        var amtTxt = fmtAmt(edgeData.amount), symTxt = 'ETH'
+        var amtTxt = fmtAmt(edgeData.amount), symTxt = ''
         for (var ti = 0; ti < rawTransfers.value.length; ti++) {
           if (rawTransfers.value[ti].id === edgeData.id) {
             symTxt = tokenSym(rawTransfers.value[ti])
             break
           }
         }
+        // Format: [orderId] amount SYMBOL
         var lbl = '[' + edgeData.id + '] ' + amtTxt + ' ' + symTxt
-        var lw = Math.max(lbl.length * 6.8, 85)
+        var lw = Math.max(lbl.length * 6.6, 90)
 
         el.attr('transform', 'translate(' + lx.toFixed(1) + ',' + ly.toFixed(1) + ')')
           .select('.ffp-label-bg')
@@ -831,7 +853,6 @@ export default {
     function dragged(event, d) {
       d.fx = event.x
       d.fy = event.y
-      // Re-render during drag
       var d3Nodes = nodeElements.data()
       var d3Edges = edgeElements ? edgeElements.data() : []
       var d3NodeMap = {}
@@ -851,10 +872,8 @@ export default {
     /* ════════ PARTICLE ANIMATION ENGINE ════════ */
     var activeParticleTimers = {}
 
-    /** Start particles flowing along a specific edge's path */
     function startParticles(edgeData) {
       if (activeParticleTimers[edgeData.id]) return
-      // Get current path d from the DOM
       var group = edgeElements.filter(function(d) { return d.id === edgeData.id })
       if (group.empty()) return
       var basePathD = group.select('.ffp-edge-base').attr('d')
@@ -863,25 +882,21 @@ export default {
       var pGroup = group.select('.ffp-particle-group')
       pGroup.selectAll('*').remove()
 
-      // Create 3-5 small circle particles that travel along the path
       var numParticles = Math.min(4, Math.max(2, Math.ceil(basePathD.length / 200)))
       for (var i = 0; i < numParticles; i++) {
         pGroup.append('circle')
           .attr('class', 'ffp-particle')
-          .attr('r', 3)
+          .attr('r', 2.8)
           .attr('fill', edgeData.color)
           .attr('filter', 'url(#glow)')
       }
 
-      // Animate particles along the path using getPointAtLength
-      var duration = 1200 + Math.random() * 400
+      var duration = 1100 + Math.random() * 350
       var startTime = null
       var pathEl = null
-      // Create a temporary SVG path element to use getPointAtLength
       try {
         pathEl = svgRef.value.querySelector('path[d="' + basePathD.replace(/"/g, "'") + '"]')
         if (!pathEl) {
-          // Fallback: create off-screen path
           pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path')
           pathEl.setAttribute('d', basePathD)
         }
@@ -895,7 +910,6 @@ export default {
         if (!activeParticleTimers[edgeData.id]) return
         if (!startTime) startTime = timestamp
         var elapsed = timestamp - startTime
-        // Each particle has a different phase offset
         pGroup.selectAll('.ffp-particle').each(function(d, idx) {
           var phase = ((elapsed / duration) + idx / numParticles) % 1
           var len = phase * totalLen
@@ -907,7 +921,7 @@ export default {
           }
           if (pt) {
             d3.select(this).attr('cx', pt.x).attr('cy', pt.y)
-              .attr('opacity', 0.7 + 0.3 * Math.sin(phase * Math.PI))
+              .attr('opacity', 0.65 + 0.35 * Math.sin(phase * Math.PI))
           }
         })
         requestAnimationFrame(animateParticles)
@@ -915,7 +929,6 @@ export default {
       requestAnimationFrame(animateParticles)
     }
 
-    /** Stop all particle animations */
     function stopAllParticles() {
       Object.keys(activeParticleTimers).forEach(function(key) {
         activeParticleTimers[key] = false
@@ -931,11 +944,10 @@ export default {
       var hoveredAddr = hoveredNodeData.address
       var connectedIds = neMap[hoveredAddr] || []
 
-      // Highlight connected edges — base path brightens, glow overlay appears
       edgeElements.select('.ffp-edge-base')
         .transition().duration(150)
         .attr('stroke-opacity', function(d) {
-          return connectedIds.indexOf(d.id) !== -1 ? 1 : 0.08
+          return connectedIds.indexOf(d.id) !== -1 ? 1 : 0.06
         })
         .attr('stroke-width', function(d) {
           return connectedIds.indexOf(d.id) !== -1 ? 2.5 : 1.5
@@ -944,17 +956,15 @@ export default {
       edgeElements.select('.ffp-edge-glow')
         .transition().duration(150)
         .attr('opacity', function(d) {
-          return connectedIds.indexOf(d.id) !== -1 ? 0.9 : 0
+          return connectedIds.indexOf(d.id) !== -1 ? 0.85 : 0
         })
 
-      // Start particles on connected edges, stop on others
       for (var ei = 0; ei < allEdges.length; ei++) {
         if (connectedIds.indexOf(allEdges[ei].id) !== -1) {
           startParticles(allEdges[ei])
         }
       }
 
-      // Highlight this node and connected nodes
       var connectedAddrs = new Set([hoveredAddr])
       for (var ei = 0; ei < allEdges.length; ei++) {
         if (connectedIds.indexOf(allEdges[ei].id) !== -1) {
@@ -968,94 +978,84 @@ export default {
         .select('.ffp-node-card')
         .transition().duration(150)
         .attr('fill', function(d) {
-          if (d.address === hoveredAddr) return '#1a2234'
-          if (connectedAddrs.has(d.address)) return '#151b24'
+          if (d.address === hoveredAddr) return '#1c2333'
+          if (connectedAddrs.has(d.address)) return '#171d27'
           return '#161b22'
         })
         .attr('stroke', function(d) {
           if (d.address === hoveredAddr) return getHighlightColor(d, allEdges, connectedIds)
-          if (connectedAddrs.has(d.address)) return '#38404c'
+          if (connectedAddrs.has(d.address)) return '#373f4c'
           return '#2d333b'
         })
         .attr('stroke-width', function(d) {
-          return d.address === hoveredAddr ? 2.5 : (connectedAddrs.has(d.address) ? 1.5 : 1)
+          return d.address === hoveredAddr ? 2.3 : (connectedAddrs.has(d.address) ? 1.4 : 1)
         })
         .attr('filter', function(d) {
           return d.address === hoveredAddr ? 'url(#glow)' : 'url(#nShadow)'
         })
 
-      // Show tooltip
       nodeElements.select('.ffp-tooltip-fo')
         .transition().duration(150)
         .attr('opacity', function(d) { return d.address === hoveredAddr ? 1 : 0 })
 
-      // Dim unrelated labels
       labelElements
         .transition().duration(150)
-        .attr('opacity', function(d) { return connectedIds.indexOf(d.id) !== -1 ? 1 : 0.15 })
+        .attr('opacity', function(d) { return connectedIds.indexOf(d.id) !== -1 ? 1 : 0.12 })
     }
 
     function handleEdgeHover(hoveredEdgeData, allNodes, nodeMap, neMap) {
       var hoveredId = hoveredEdgeData.id
       var relatedAddrs = [hoveredEdgeData.from, hoveredEdgeData.to]
 
-      // Highlight this edge only — base brightens + glow overlay appears
       edgeElements.select('.ffp-edge-base')
         .transition().duration(150)
-        .attr('stroke-opacity', function(d) { return d.id === hoveredId ? 1 : 0.08 })
+        .attr('stroke-opacity', function(d) { return d.id === hoveredId ? 1 : 0.06 })
         .attr('stroke-width', function(d) { return d.id === hoveredId ? 2.5 : 1.5 })
 
       edgeElements.select('.ffp-edge-glow')
         .transition().duration(150)
-        .attr('opacity', function(d) { return d.id === hoveredId ? 0.9 : 0 })
+        .attr('opacity', function(d) { return d.id === hoveredId ? 0.85 : 0 })
 
-      // Start particle animation on this edge
       startParticles(hoveredEdgeData)
 
-      // Highlight source and target nodes
       nodeElements
         .classed('ffp-node-active', function(d) { return relatedAddrs.indexOf(d.address) !== -1 })
         .select('.ffp-node-card')
         .transition().duration(150)
         .attr('fill', function(d) {
-          return relatedAddrs.indexOf(d.address) !== -1 ? '#1a2234' : '#161b22'
+          return relatedAddrs.indexOf(d.address) !== -1 ? '#1c2333' : '#161b22'
         })
         .attr('stroke', function(d) {
           if (relatedAddrs.indexOf(d.address) !== -1) return hoveredEdgeData.color
           return '#2d333b'
         })
         .attr('stroke-width', function(d) {
-          return relatedAddrs.indexOf(d.address) !== -1 ? 2.5 : 1
+          return relatedAddrs.indexOf(d.address) !== -1 ? 2.3 : 1
         })
         .attr('filter', function(d) {
           return relatedAddrs.indexOf(d.address) !== -1 ? 'url(#glow)' : 'url(#nShadow)'
         })
 
-      // Highlight this label
       labelElements
         .transition().duration(150)
-        .attr('opacity', function(d) { return d.id === hoveredId ? 1 : 0.15 })
+        .attr('opacity', function(d) { return d.id === hoveredId ? 1 : 0.12 })
         .select('.ffp-label-bg')
         .attr('opacity', function(d) { return d.id === hoveredId ? 1 : 0.92 })
     }
 
     function handleHoverEnd() {
       if (!edgeElements || !nodeElements || !labelElements) return
-
-      // Stop all particle animations
       stopAllParticles()
 
-      // Reset edges — base path back to normal, hide glow
       edgeElements.select('.ffp-edge-base')
         .transition().duration(200)
-        .attr('stroke-opacity', 0.65)
+        .attr('stroke-opacity', 0.55)
         .attr('stroke-width', 2)
 
       edgeElements.select('.ffp-edge-glow')
         .transition().duration(200)
         .attr('opacity', 0)
 
-      // Reset nodes
       nodeElements
         .classed('ffp-node-active', false)
         .select('.ffp-node-card')
@@ -1069,7 +1069,6 @@ export default {
         .transition().duration(200)
         .attr('opacity', 0)
 
-      // Reset labels
       labelElements
         .transition().duration(200)
         .attr('opacity', 1)
@@ -1146,7 +1145,6 @@ export default {
           var cv = document.createElement('canvas'), sv = 2
           cv.width = 1600 * sv; cv.height = 600 * sv
           var ctx = cv.getContext('2d')
-          ctx.scale(sv, sv)
           ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, 1600, 600)
           ctx.drawImage(img, 0, 0, 1600, 600)
           cv.toBlob(function(b) {
@@ -1227,6 +1225,7 @@ export default {
 .ffp-export-btn svg{flex-shrink:0}
 .ffp-divider{width:1px;height:20px;background:#30363d;margin:0 4px}
 
+/* Empty / Loading / Error states */
 .ffp-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:56px 20px;gap:12px;color:#484f58;font-size:13px}
 .ffp-empty-icon{width:48px;height:48px;opacity:.35}
 .ffp-loading{display:flex;align-items:center;justify-content:center;gap:10px;padding:48px 20px;color:#6e7681;font-size:13px}
@@ -1234,26 +1233,22 @@ export default {
 @keyframes ffpSpin{to{transform:rotate(360deg)}}
 .ffp-error-state{display:flex;align-items:center;justify-content:center;gap:6px;padding:20px;color:#f85149;font-size:12px;background:#3d1017;margin:12px 16px;border-radius:6px;border:1px solid #67080c}
 
-/* Canvas */
+/* Canvas area */
 .ffp-canvas-wrap{position:relative;width:100%;height:600px;overflow:hidden;background:#0d1117;cursor:grab;user-select:none}
 .ffp-canvas-wrap:active{cursor:grabbing}
 .ffp-svg{width:100%;height:100%;display:block;background:#0d1117}
 
-/* Grid */
+/* Grid dots */
 .ffp-grid-layer{pointer-events:none}
 
 /* Edges */
 .ffp-edge-layer{pointer-events:none}
 .ffp-edge-group{pointer-events:all}
-.ffp-edge-group:hover .ffp-edge-base{
-  cursor:pointer;
-}
-/* Base path — always visible with arrow, dims on hover of other edges */
+.ffp-edge-group:hover .ffp-edge-base{ cursor:pointer; }
 .ffp-edge-base{
-  stroke-opacity:.65;
+  stroke-opacity:.55;
   transition:stroke-opacity .25s ease, stroke-width .2s ease;
 }
-/* Glow overlay — hidden by default, shown on active/hover */
 .ffp-edge-glow{
   opacity:0;
   transition:opacity .2s ease;
@@ -1263,9 +1258,10 @@ export default {
 /* Particles */
 .ffp-particle-group{pointer-events:none}
 
-/* Nodes */
+/* Nodes — BlockSec style cards */
 .ffp-node-group{transition:all .2s ease}
 .ffp-node-group:active{cursor:grabbing!important}
+.ffp-accent-bar{transition:opacity .2s ease}
 
 /* Labels */
 .ffp-label-layer{pointer-events:none}

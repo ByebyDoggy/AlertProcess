@@ -145,6 +145,10 @@ class BaseNode(ABC):
       - get_inputs()           输入端口列表
       - get_outputs()          输出端口列表
       - execute()              异步执行逻辑
+
+    上下文声明:
+      通过 @require("provider_name") 装饰器声明额外上下文需求。
+      未标注的节点默认只使用 eth_logs 上下文（零 API 调用）。
     """
 
     name: ClassVar[str]
@@ -153,6 +157,9 @@ class BaseNode(ABC):
     category: ClassVar[NodeCategory]
     icon: ClassVar[str] = ""
     color: ClassVar[str] = "#6366f1"
+
+    # @require 装饰器设置的上下文需求
+    __required_providers__: ClassVar[tuple[str, ...]] = ()
 
     # 实例属性（每个节点实例独立）
     node_id: str = ""
@@ -183,6 +190,15 @@ class BaseNode(ABC):
     def get_default_config(cls) -> dict[str, Any]:
         """返回默认配置"""
         return {}
+
+    @classmethod
+    def get_required_providers(cls) -> tuple[str, ...]:
+        """
+        返回此节点所需的上下文 Provider 名称列表。
+
+        通过 @require 装饰器设置，未标注的节点返回空元组。
+        """
+        return getattr(cls, "__required_providers__", ())
 
     @abstractmethod
     async def execute(
@@ -296,6 +312,7 @@ class NodeRegistry:
                 "outputs": [p.model_dump() for p in node_class.get_outputs()],
                 "config_schema": node_class.get_config_schema(),
                 "default_config": node_class.get_default_config(),
+                "required_providers": list(node_class.get_required_providers()),
             })
         return result
 

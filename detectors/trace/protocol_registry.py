@@ -3,9 +3,10 @@
 ==============
 通过 to 地址匹配已知的 DeFi 协议名称。
 
-数据来源:
-  - 手动维护的已知合约地址 (高置信度)
-  - 可扩展: 从 DefiLlama / Etherscan labels API 同步
+数据来源 (优先级从高到低):
+  1. TokenPriceCache (内存缓存，从 MarketDataBase 全量拉取，含 decimals/symbol/price)
+  2. 手动维护的已知合约地址 (硬编码 fallback)
+  3. 可扩展: 从 DefiLlama / Etherscan labels API 同步
 
 参考文档: docs/dev-plan-trace-analysis.md §3.5 (隐含在 analyzer 中)
 """
@@ -115,13 +116,15 @@ _PROTOCOLS_BSC: dict[str, dict] = {
 
 # Token 符号映射 (跨链通用)
 _TOKEN_SYMBOLS: dict[str, dict] = {
-    # ETH
+    # ETH Mainnet
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {"symbol": "WETH", "decimals": 18},
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": {"symbol": "USDC", "decimals": 6},
+    "0xdac17f958d2ee523a2206206994597c13d831ec7": {"symbol": "USDT", "decimals": 6},
     # BSC
     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c": {"symbol": "WBNB", "decimals": 18},
     "0x55d398326f99059ff775485246999027b3197955": {"symbol": "USDT", "decimals": 18},
     "0x2170ed0880ac9a755fd29b2688956bd959f933f8": {"symbol": "WETH", "decimals": 18},
-    "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {"symbol": "USDC", "decimals": 18},
+    "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {"symbol": "USDC", "decimals": 18},  # BSC USDC (bridged)
     "0xe9e7cea3dedca5984780bafc599bd69add087d56": {"symbol": "BUSD", "decimals": 18},
 }
 
@@ -136,12 +139,17 @@ class ProtocolRegistry:
     """
     协议地址标签注册表
 
+    Token 信息获取策略 (优先级从高到低):
+      1. TokenPriceCache — 从 MarketDataBase 全量拉取的内存缓存 (symbol/decimals/price/logo)
+      2. _TOKEN_SYMBOLS  — 硬编码 fallback (仅覆盖少量主流代币)
+
+    协议标签获取:
+      _CHAIN_REGISTRIES / _custom — 手动维护的 DeFi 合约地址库
+
     用法:
         reg = ProtocolRegistry()
-        info = reg.match("0x7a250d5630b4cf539739df2c5dacb4c659f2488d", chain_id=1)
-        # → {"name": "Uniswap V2 Router 02", "category": "DEX"}
-        symbol = reg.get_token_symbol("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c")
-        # → "WBNB"
+        symbol = reg.get_token_symbol("0xa0b86991...", chain_id=1)
+        # → "USDC" (从 TokenPriceCache 或硬编码 fallback)
     """
 
     def __init__(self, custom_json_path: str | Path | None = None):
@@ -159,6 +167,20 @@ class ProtocolRegistry:
                 logger.info(
                     f"[ProtocolRegistry] Loaded {len(self._custom)} custom entries from {p}"
                 )
+
+        # 延迟初始化 TokenPriceCache 引用（避免循环导入 + 启动时装载）
+        self._price_cache = None
+
+    def _get_price_cache(self):
+        """延迟获取 TokenPriceCache 单例"""
+        if self._price_cache is None:
+            try:
+                from detectors.trace.token_price_cache import get_token_price_cache
+                self._price_cache = get_token_price_cache()
+            except Exception as e:
+                logger.debug(f"[ProtocolRegistry] TokenPriceCache unavailable: {e}")
+                self._price_cache = False  # 标记为不可用，避免反复重试
+        return self._price_cache or None
 
     def match(self, address: str, chain_id: int = 1) -> Optional[dict]:
         """
@@ -188,17 +210,47 @@ class ProtocolRegistry:
         info = self.match(address, chain_id)
         return info["name"] if info else None
 
-    def get_token_symbol(self, address: str) -> Optional[str]:
-        """获取已知 token 的符号"""
+    def get_token_symbol(self, address: str, chain_id: int = 1) -> Optional[str]:
+        """
+        获取已知 token 的符号
+
+        优先级: TokenPriceCache (MarketDataBase) > 硬编码 fallback
+        """
         addr = address.lower().strip()
+
+        # 1. 优先从 TokenPriceCache 读取（从 MarketDataBase 全量拉取）
+        cache = self._get_price_cache()
+        if cache is not None:
+            meta = cache.get(chain_id, addr)
+            if meta and meta.symbol:
+                return meta.symbol
+
+        # 2. Fallback: 硬编码表
         tok = _TOKEN_SYMBOLS.get(addr)
         return tok["symbol"] if tok else None
 
-    def get_token_decimals(self, address: str) -> int:
-        """获取已知 token 的精度"""
+    def get_token_decimals(self, address: str, chain_id: int = 1) -> int:
+        """
+        获取已知 token 的精度
+
+        优先级: TokenPriceCache (MarketDataBase) > 硬编码 > 默认18
+        """
         addr = address.lower().strip()
+
+        # 1. 优先从 TokenPriceCache 读取
+        cache = self._get_price_cache()
+        if cache is not None:
+            meta = cache.get(chain_id, addr)
+            if meta and meta.decimals is not None:
+                return meta.decimals
+
+        # 2. Fallback: 硬编码表
         tok = _TOKEN_SYMBOLS.get(addr)
-        return tok["decimals"] if tok else 18
+        if tok and "decimals" in tok:
+            return tok["decimals"]
+
+        # 3. 默认精度
+        return 18
 
     def all_protocols_for_chain(self, chain_id: int) -> list[dict]:
         """返回某条链上所有已知协议 (供前端展示)"""

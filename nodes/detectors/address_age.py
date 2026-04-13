@@ -1,30 +1,33 @@
-"""地址年龄检测器 — 迁移到新节点架构（框架实现，需外部 API）"""
+"""地址年龄检测器 — 通过 @require("moralis_address") 自动获取上下文"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from nodes.base import NodeRegistry
+from nodes.context.require import require
 from nodes.detectors.base import BaseDetector
 
 
+@require("moralis_address")
 class AddressAgeDetector(BaseDetector):
     """
     地址年龄检测器 — 检测新建地址的交易行为。
+
+    上下文需求:
+      @require("moralis_address")
+      → 执行前自动注入: address_create_time, address_age_days
 
     评分:
     - 地址创建 < 1 天 → 90
     - 地址创建 < 阈值天数 → 70
     - 地址创建 < 2x阈值 → 40
     - 无数据 → 0
-
-    注意: 此检测器需要外部 API（Moralis）或数据库缓存支持。
-    当前为框架实现，优先使用 context 中的 `address_create_time` 字段。
     """
 
     name: str = "address_age_detector"
     label: str = "地址年龄检测"
-    description: str = "检测可疑的新建地址"
+    description: str = "检测可疑的新建地址（需 Moralis API 上下文）"
     icon: str = "\U0001f4c5"
     color: str = "#14b8a6"
 
@@ -47,7 +50,9 @@ class AddressAgeDetector(BaseDetector):
         if not address:
             return 0.0, {"error": "no address available"}
 
-        # 优先使用 context 中的 create_time
+        # @require("moralis_address") 已自动注入以下字段:
+        # - address_create_time: ISO8601 时间字符串
+        # - address_age_days: 距今天数
         create_time_str = context.get("address_create_time")
         age_days = context.get("address_age_days")
 
@@ -65,8 +70,11 @@ class AddressAgeDetector(BaseDetector):
             except Exception:
                 return 0.0, {"error": "invalid create_time format", "address": address}
         else:
-            # 无年龄数据，尝试从 chain_id 获取
-            return 0.0, {"address": address, "reason": "no age data in context"}
+            # Moralis API 未配置或调用失败
+            return 0.0, {
+                "address": address,
+                "reason": "no age data (Moralis API not configured or unavailable)",
+            }
 
         details["address"] = address
         return score, details

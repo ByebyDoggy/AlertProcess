@@ -6,6 +6,7 @@
 - 分层: 同层（无依赖关系）的节点 asyncio.gather 并发执行
 - 根据输出端口（true/false）决定下游路径
 - 全链路 async/await，不阻塞事件循环
+- @require 上下文自动注入: 执行前按需调用 Provider 填充上下文
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ class ChainExecutor:
             ExecutionContext 包含所有节点输出、日志和聚合结果
         """
         ctx = ExecutionContext(alert_data=alert_data, dry_run=dry_run)
+
+        # 清空上下文缓存（每次规则链执行开始时重置）
+        self._clear_context_cache()
 
         # 1. 校验规则链
         validation_errors = self._validator.validate(chain)
@@ -119,6 +123,21 @@ class ChainExecutor:
         # 检查是否应该执行此节点（基于上游端口路由）
         if not self._should_execute(node_id, chain, ctx):
             return
+
+        # ── @require 上下文自动注入 ──
+        required_providers = node.get_required_providers()
+        if required_providers:
+            # 构建合并上下文（与 BaseDetector._merge_context 逻辑一致）
+            upstream = self._first_upstream_output(inputs)
+            merged_for_resolver = {**ctx.alert_data, **(upstream.context if upstream else {})}
+
+            # 调用 ContextResolver 填充上下文
+            extra_context = await self._resolve_context(
+                required_providers, merged_for_resolver
+            )
+            if extra_context:
+                # 注入到 alert_data 中，节点执行时自动获取
+                ctx.alert_data.update(extra_context)
 
         # 执行
         start_time = time.monotonic()
@@ -260,3 +279,48 @@ class ChainExecutor:
             return []  # 有环
 
         return layers
+
+    # ------------------------------------------------------------------
+    # @require 上下文解析辅助
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _first_upstream_output(
+        inputs: dict[str, list[NodeOutput]],
+    ) -> NodeOutput | None:
+        """从 inputs 中获取第一个可用的上游输出"""
+        for port_key in sorted(inputs.keys()):
+            if inputs[port_key]:
+                return inputs[port_key][0]
+        return None
+
+    async def _resolve_context(
+        self,
+        provider_names: tuple[str, ...] | list[str],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        调用 ContextResolver 解析 @require 声明的上下文。
+
+        如果 resolver 不可用（如未初始化），静默返回空 dict。
+        """
+        try:
+            from nodes.context import get_context_resolver
+            resolver = get_context_resolver()
+            return await resolver.resolve(list(provider_names), context)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[ChainExecutor] Context resolution failed: {e}"
+            )
+            return {}
+
+    @staticmethod
+    def _clear_context_cache() -> None:
+        """清空 ContextResolver 的执行级缓存"""
+        try:
+            from nodes.context import get_context_resolver
+            resolver = get_context_resolver()
+            resolver.clear_cache()
+        except Exception:
+            pass

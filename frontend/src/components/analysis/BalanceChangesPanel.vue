@@ -69,7 +69,8 @@
 
           <!-- Token -->
           <span class="col-token">
-            <span class="bcp-tok-icon" :style="{ background: tokenColor(row.tokenSymbol) }"></span>
+            <img v-if="row.logoUrl" :src="row.logoUrl" class="bcp-tok-img" @error="e => e.target.style.display='none'" />
+            <span v-else class="bcp-tok-icon" :style="{ background: tokenColor(row.tokenSymbol) }"></span>
             {{ row.tokenSymbol }}
           </span>
 
@@ -93,10 +94,11 @@
           <!-- Value USD -->
           <span :class="['col-usd', row.amountRaw >= 0 ? 'bal-pos' : 'bal-neg']">
             {{ formatUSD(row.valueUsd) }}
+            <span v-if="row.priceUsd" class="bcp-price-hint" :title="`1 ${row.tokenSymbol} ≈ $${row.priceUsd}`">@${{ formatPrice(row.priceUsd) }}</span>
           </span>
 
           <!-- Total USD (始终占位, 仅第一行显示内容) -->
-          <span class="col-total" :class="[ri === 0 ? (group.totalNet >= 0 ? 'total-pos' : 'total-neg') : '']">
+          <span class="col-total" :class="[ri === 0 ? (group.totalUsd >= 0 ? 'total-pos' : 'total-neg') : '']">
             {{ ri === 0 ? group.totalUsdFormatted : '' }}
           </span>
         </div>
@@ -184,10 +186,11 @@ const groupedData = computed(() => {
     const c = changes[i]
     const addr = c.address?.toLowerCase() || ''
     if (!groups[addr]) {
-      groups[addr] = { label: '', labelFull: '', rows: [], totalNet: 0 }
+      groups[addr] = { label: '', labelFull: '', rows: [], totalNet: 0, totalUsd: 0 }
     }
     groups[addr].rows.push(c)
     groups[addr].totalNet += (c.amountRaw || 0)
+    groups[addr].totalUsd += (c.valueUsd || 0)
   }
 
   // 格式化每个组的地址标签
@@ -205,12 +208,11 @@ const groupedData = computed(() => {
       g.labelFull = addr
     }
 
-    // 格式化 Total USD
-    const ethRow = g.rows.find(r => r.tokenSymbol.toUpperCase() === 'ETH')
+    // 格式化 Total USD — 汇总所有 token 的 USD 估值
     let usdStr = '-'
-    if (ethRow && ethRow.valueUsd != null && ethRow.valueUsd !== 0) {
-      const prefix = ethRow.amountRaw >= 0 ? '+' : ''
-      usdStr = `${prefix}$${Math.abs(ethRow.valueUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    if (g.totalUsd !== 0) {
+      const prefix = g.totalUsd >= 0 ? '+' : '-'
+      usdStr = `${prefix}$${Math.abs(g.totalUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
     }
     g.totalUsdFormatted = usdStr
   }
@@ -232,6 +234,13 @@ function formatUSD(v) {
   if (v == null || v === 0) return '-'
   const prefix = v >= 0 ? '$' : '-$'
   return `${prefix}${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+}
+
+function formatPrice(v) {
+  if (v == null) return '-'
+  if (v >= 1) return v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  if (v >= 0.001) return v.toFixed(4)
+  return v.toExponential(2)
 }
 
 function short_addr(a) {
@@ -259,7 +268,7 @@ function tokenColor(sym) {
 function downloadCSV() {
   const changes = effectiveChanges.value
   if (!changes.length) return
-  const headers = ['Address','Label','Token','Token ID','Balance Raw','Balance Formatted','Value USD']
+  const headers = ['Address','Label','Token','Token ID','Balance Raw','Balance Formatted','Value USD','Price USD','Logo URL']
   const rows = changes.map(c => [
     c.address,
     c.addressLabel,
@@ -268,6 +277,8 @@ function downloadCSV() {
     c.amountRaw,
     c.amountFormatted,
     c.valueUsd ?? '',
+    c.priceUsd ?? '',
+    c.logoUrl ?? '',
   ])
   const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${v}"`).join(','))].join('\n')
   const blob = new Blob([csv], { type: 'text/csv' })
@@ -389,6 +400,10 @@ function downloadCSV() {
   width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
   display: inline-block;
 }
+.bcp-tok-img {
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  display: inline-block; object-fit: cover;
+}
 
 /* Token ID — 可点击复制 */
 .col-id {
@@ -403,6 +418,10 @@ function downloadCSV() {
 .bal-neg { color: #f85149; }
 .bal-pos { color: #3fb950; }
 .col-bal, .col-usd { text-align: right; font-weight: 600; }
+.bcp-price-hint {
+  font-size: 9px; color: #484f58; font-weight: 400; margin-left: 3px;
+  cursor: help;
+}
 
 /* Total */
 .total-neg { color: #f85149; font-weight: 700; background: rgba(248,81,73,.06);

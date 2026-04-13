@@ -1,0 +1,38 @@
+{
+    "tokenFlows": [
+        {
+            "tokenAddress": "0x66a1e37c9b0eaddca17d3662d6c05f4decf3e110",
+            "tokenSymbol": "UNKNOWN",
+            "tokenName": null,
+            "decimals": 18,
+            "amountRaw": 30000000000000000000000000,
+            "amountFormatted": "30000000.0000 UNKNOWN",
+            "direction": "in",
+            "fromLabel": "0x0000000000...",
+            "toLabel": "0xa27a69ae18..."
+        },
+        {
+            "tokenAddress": "0x66a1e37c9b0eaddca17d3662d6c05f4decf3e110",
+            "tokenSymbol": "UNKNOWN",
+            "tokenName": null,
+            "decimals": 18,
+            "amountRaw": 29970000000000000000000000,
+            "amountFormatted": "29970000.0000 UNKNOWN",
+            "direction": "out",
+            "fromLabel": "0xa27a69ae18...",
+            "toLabel": "0x04a288a778..."
+        },
+        {
+            "tokenAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "tokenSymbol": "UNKNOWN",
+            "tokenName": null,
+            "decimals": 18,
+            "amountRaw": 100000000000,
+            "amountFormatted": "0.0000 UNKNOWN",
+            "direction": "out",
+            "fromLabel": "0xa27a69ae18...",
+            "toLabel": "0xacb7027f27..."
+        }
+    ],
+    "apiElapsedSeconds": 0.0
+}

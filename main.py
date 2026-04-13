@@ -5,7 +5,8 @@ from fastapi.responses import FileResponse
 from routers import alertRouter
 from routers.rule_chain.router import ruleChainRouter
 from routers.knowledge_base import knowledgeBaseRouter
-from routers.detectors import trace_router
+from routers.detectors import trace_router, ingest_router
+from routers.pool_config.pool_config_router import poolConfigRouter
 from database.models import SessionLocal
 from config import settings
 import os
@@ -25,6 +26,10 @@ from nodes.base import NodeRegistry
 
 # 初始化节点注册表
 nodes.init_registry()
+
+# 初始化上下文解析器（注册所有内置 Provider）
+from nodes.context import init_context_resolver
+init_context_resolver()
 
 app = FastAPI(
     title="Alert Webhook Service",
@@ -50,6 +55,8 @@ app.include_router(alertRouter)
 app.include_router(ruleChainRouter)
 app.include_router(knowledgeBaseRouter)
 app.include_router(trace_router)
+app.include_router(ingest_router)
+app.include_router(poolConfigRouter)
 
 
 # ──────────────── 启动时加载预置知识库样本 ────────────────
@@ -99,6 +106,30 @@ async def seed_knowledge_base():
     finally:
         db.close()
 
+
+@app.on_event("startup")
+async def start_token_price_cache():
+    """应用启动时，初始化 TokenPriceCache 并开启后台全量价格刷新"""
+    try:
+        from detectors.trace.token_price_cache import get_token_price_cache
+        cache = get_token_price_cache()
+        await cache.start_background_refresh()
+        print("[startup] TokenPriceCache background refresh started (5min interval)")
+    except Exception as e:
+        print(f"[startup] TokenPriceCache init failed (non-fatal): {e}")
+
+
+@app.on_event("shutdown")
+async def cleanup_token_price_cache():
+    """应用关闭时，停止价格缓存后台任务和 HTTP 客户端"""
+    try:
+        from detectors.trace.token_price_cache import get_token_price_cache
+        cache = get_token_price_cache()
+        await cache.close()
+        print("[shutdown] TokenPriceCache cleaned up")
+    except Exception as e:
+        print(f"[shutdown] TokenPriceCache cleanup error: {e}")
+
 # 静态前端文件服务 (仅当 dist 目录存在时)
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 if os.path.isdir(frontend_dist):
@@ -109,7 +140,7 @@ if os.path.isdir(frontend_dist):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """SPA fallback: 返回 index.html 对所有非 API 路径"""
-        if full_path.startswith(("alert", "rule-chain", "knowledge-base", "detectors")):
+        if full_path.startswith(("alert", "rule-chain", "knowledge-base", "detectors", "pool-config")):
             return {"detail": "Not Found"}
         file_path = os.path.join(frontend_dist, full_path)
         if os.path.isfile(file_path):

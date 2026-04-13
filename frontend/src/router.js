@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import RuleChainEditor from './views/RuleChainEditor.vue'
 import KnowledgeBase from './views/KnowledgeBase.vue'
 import ChainAnalysis from './views/ChainAnalysis.vue'
+import PoolConfig from './views/PoolConfig.vue'
 
 const routes = [
   {
@@ -23,6 +24,12 @@ const routes = [
     name: 'ChainAnalysis',
     component: ChainAnalysis,
     meta: { title: 'Chain Analysis' }
+  },
+  {
+    path: '/pool-config',
+    name: 'PoolConfig',
+    component: PoolConfig,
+    meta: { title: 'Pool Configuration' }
   },
 ]
 

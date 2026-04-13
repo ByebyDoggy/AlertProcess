@@ -215,6 +215,8 @@ class TokenFlowItem:
     direction: str = ""               # "in" / "out"
     from_label: str = ""              # 协议名或地址缩写
     to_label: str = ""
+    from_address: str = ""            # 完整发送地址（用于 Fund Flow 图节点构建）
+    to_address: str = ""              # 完整接收地址
 
     def to_dict(self) -> dict:
         """camelCase 以匹配前端"""
@@ -228,6 +230,47 @@ class TokenFlowItem:
             "direction": self.direction,
             "fromLabel": self.from_label,
             "toLabel": self.to_label,
+            "fromAddress": self.from_address,
+            "toAddress": self.to_address,
+        }
+
+
+@dataclass
+class CallTransferItem:
+    """
+    从 call tree 中提取的 transfer 函数调用 — 用于绘制 BlockSec 风格资金流转图
+    
+    按调用顺序编号，每条记录代表一次 transfer(address,uint256) 调用
+    """
+    order_id: int = 0                    # 调用顺序编号 (从1开始)
+    from_address: str = ""                # 调用者 / param_0 (from address)
+    to_address: str = ""                  # param_0 (to address)
+    amount: int = 0                       # 原始金额 (wei/raw units)
+    amount_formatted: str = ""            # 格式化金额，如 "100,000"
+    value: int = 0                        # ETH value 附带 (wei)
+    token_symbol: str = ""                # 代币符号
+    token_address: str = ""               # 代币合约地址
+    function_signature: str = ""          # 函数签名如 "transfer(address,uint256)"
+    selector: str = ""                   # 选择器如 "0xa9059cbb"
+    depth: int = 0                        # 调用深度
+    trace_address: list[int] = field(default_factory=list)  # traceAddress
+    caller_contract: str = ""             # 发起调用的合约地址 (node.to_address)
+    
+    def to_dict(self) -> dict:
+        return {
+            "orderId": self.order_id,
+            "fromAddress": self.from_address,
+            "toAddress": self.to_address,
+            "amount": self.amount,
+            "amountFormatted": self.amount_formatted,
+            "value": self.value,
+            "tokenSymbol": self.token_symbol,
+            "tokenAddress": self.token_address,
+            "functionSig": self.function_signature,
+            "selector": self.selector,
+            "depth": self.depth,
+            "traceAddress": self.trace_address,
+            "callerContract": self.caller_contract,
         }
 
 
@@ -242,6 +285,8 @@ class BalanceChangeItem:
     amount_raw: int = 0                    # 净变化量 (正=收入, 负=支出)
     amount_formatted: str = ""             # 如 "+13,900.0000" / "-2,305.4277"
     value_usd: float = 0.0                # USD 估值 (可选)
+    price_usd: Optional[float] = None      # 该代币当前单价 (USD)
+    logo_url: Optional[str] = None         # 代币 Logo URL
 
     def to_dict(self) -> dict:
         return {
@@ -253,6 +298,8 @@ class BalanceChangeItem:
             "amountRaw": self.amount_raw,
             "amountFormatted": self.amount_formatted,
             "valueUsd": round(self.value_usd, 2) if self.value_usd else None,
+            "priceUsd": round(self.price_usd, 4) if self.price_usd else None,
+            "logoUrl": self.logo_url,
         }
 
 
@@ -272,6 +319,7 @@ class FullAnalysisResult:
     behaviors: list[BehaviorResult] = field(default_factory=list)
     protocols: list[ProtocolInfo] = field(default_factory=list)
     token_flows: list[TokenFlowItem] = field(default_factory=list)
+    call_transfers: list[CallTransferItem] = field(default_factory=list)
     balance_changes: list[BalanceChangeItem] = field(default_factory=list)
     selector_stats: list[dict] = field(default_factory=list)
 
@@ -284,6 +332,7 @@ class FullAnalysisResult:
             "behaviors": [b.to_dict() for b in self.behaviors],
             "protocols": [p.to_dict() for p in self.protocols],
             "tokenFlows": [f.to_dict() for f in self.token_flows],
+            "callTransfers": [c.to_dict() for c in self.call_transfers],
             "balanceChanges": [b.to_dict() for b in self.balance_changes],
             "selectorStats": self.selector_stats,
         }

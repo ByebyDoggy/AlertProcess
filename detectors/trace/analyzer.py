@@ -16,6 +16,7 @@
 参考 PoC: scripts/tx_callchain_poc.py
 """
 
+import asyncio
 import time
 import logging
 from typing import Optional
@@ -71,10 +72,16 @@ class TxTraceAnalyzer:
                                为 None 时使用内置 fallback 签名。
             protocol_registry_path: 自定义协议注册表 JSON 路径。
             rpc_client: 可选的外部 RPC 客户端实例 (用于测试注入)。
+                        默认使用全局单例 get_rpc_client()，避免重复初始化池。
         """
         self._signature_db = SignatureDB(signature_db_path)
         self._protocol_registry = ProtocolRegistry(protocol_registry_path)
-        self._rpc_client = rpc_client or MultiRpcClient()
+        if rpc_client is not None:
+            self._rpc_client = rpc_client
+        else:
+            # 共享全局 RPC Client 单例，避免每次 new Analyzer 都重新登录/拉密钥
+            from detectors.trace.provider import get_rpc_client
+            self._rpc_client = get_rpc_client()
 
     # ===================================================================
     # 公开接口 — 子类可重写
@@ -111,12 +118,40 @@ class TxTraceAnalyzer:
 
         # Step 1: 获取原始数据
         logger.info(f"[analyze] Starting analysis for {tx_hash[:16]}... on chain {chain_id}")
-        raw_traces = await self._get_raw_trace(tx_hash, chain_id)
+
+        # 并行获取: trace + receipt + tx_detail (三者无依赖关系)
+        raw_traces_task = self._get_raw_trace(tx_hash, chain_id)
+        receipt_task = self._rpc_client.get_transaction_receipt(tx_hash, chain_id)
+        tx_detail_task = self._rpc_client.get_transaction_by_hash(tx_hash, chain_id)
+
+        raw_traces, receipt, tx_detail = await asyncio.gather(
+            raw_traces_task, receipt_task, tx_detail_task,
+            return_exceptions=True,
+        )
+
+        # 处理 trace 结果 (trace 已有内部节点切换逻辑，失败直接抛出)
+        if isinstance(raw_traces, Exception):
+            raise ValueError(
+                f"No trace data available for {tx_hash}. "
+                f"The RPC may not support tracing. Error: {raw_traces}"
+            )
         if not raw_traces:
             raise ValueError(
                 f"No trace data available for {tx_hash}. "
                 f"The RPC may not support tracing."
             )
+
+        # 处理 receipt / tx_detail 结果 — 必须拿到有效数据，重试而非降级
+        receipt = await self._ensure_valid_data(
+            receipt, "receipt", tx_hash,
+            lambda: self._rpc_client.get_transaction_receipt(tx_hash, chain_id),
+        )
+        tx_detail = await self._ensure_valid_data(
+            tx_detail, "tx_detail", tx_hash,
+            lambda: self._rpc_client.get_transaction_by_hash(tx_hash, chain_id),
+        )
+
+        receipt_logs = receipt.get("logs", []) if isinstance(receipt, dict) else []
 
         # Step 2: 构建调用树
         root = self.build_call_tree(raw_traces)
@@ -127,31 +162,27 @@ class TxTraceAnalyzer:
         # Step 4: 识别协议
         protocols = self.identify_protocols(root, chain_id)
 
-        # Step 5: 获取 receipt 并关联 events
-        try:
-            receipt = await self._rpc_client.get_transaction_receipt(tx_hash, chain_id)
-            tx_detail = await self._rpc_client.get_transaction_by_hash(
-                tx_hash, chain_id
-            )
-            receipt_logs = receipt.get("logs", [])
-        except Exception as e:
-            logger.warning(f"[analyze] Failed to get receipt/logs: {e}")
-            receipt_logs = []
-            receipt = {}
-            tx_detail = {}
-
+        # Step 5: 关联 events (receipt_logs 已在 Step 1 并行获取)
         self.link_events(root, receipt_logs)
 
         # Step 6: 提取 token 流转
         token_flows = self.extract_token_flows(root)
 
+        # Step 6.1: 提取 call tree 中的 transfer 函数调用 (BlockSec 风格资金流)
+        call_transfers = self.extract_call_transfers(root)
+
         # Step 6.5: 计算余额变化 (Balance Changes)
-        balance_changes = self.compute_balance_changes(
+        balance_changes = await self.compute_balance_changes(
             root,
             tx_from=tx_detail.get("from", ""),
             tx_to_addr=tx_detail.get("to"),
             receipt_logs=receipt_logs,
+            chain_id=chain_id,
         )
+
+        # Step 6.6: 用动态数据源补全 CallNode 的 tokenSymbol
+        # identify_protocols 只查静态表，很多代币(如 USR)不在其中
+        await self._enrich_token_symbols(root, chain_id)
 
         # Step 7: 行为检测
         behaviors: list[BehaviorResult] = []
@@ -169,6 +200,7 @@ class TxTraceAnalyzer:
             behaviors=behaviors,
             protocols=protocols,
             token_flows=token_flows,
+            call_transfers=call_transfers,
             balance_changes=balance_changes,
             raw_trace_count=len(raw_traces),
             elapsed=time.time() - t_start,
@@ -182,6 +214,79 @@ class TxTraceAnalyzer:
     async def _get_raw_trace(self, tx_hash: str, chain_id: int) -> list[dict]:
         """获取原始 trace 数据"""
         return await self._rpc_client.get_transaction_trace(tx_hash, chain_id)
+
+    async def _ensure_valid_data(
+        self,
+        first_result,
+        label: str,
+        tx_hash: str,
+        fetch_fn,
+        max_retries: int = 5,
+    ):
+        """
+        确保 RPC 返回有效数据（非 None / 非 Exception / 非 null dict）。
+
+        RPC 内核层 (apipool-ng) 只在网络错误/限流时切换节点，
+        但 HTTP 200 + null 响应被视为"成功"，不触发节点轮换。
+        本方法在应用层补充重试逻辑：首次结果无效时重新调用 fetch_fn
+        （每次调用都会触发内核层的 key 轮换），直到拿到有效数据或达到上限。
+
+        Args:
+            first_result: asyncio.gather 的首次返回值
+            label: 日志标签，如 "receipt" / "tx_detail"
+            tx_hash: 交易哈希 (用于日志)
+            fetch_fn: 无参异步函数，用于重新获取数据
+            max_retries: 最大重试次数
+
+        Returns:
+            dict 类型的有效数据
+
+        Raises:
+            ValueError: 所有重试耗尽仍未拿到有效数据
+        """
+        import inspect
+
+        result = first_result
+        for attempt in range(max_retries + 1):
+            # 检查是否为有效数据
+            if isinstance(result, Exception):
+                logger.warning(
+                    f"[analyze] {label} attempt {attempt + 1}/{max_retries + 1} "
+                    f"raised {type(result).__name__}: {result}"
+                )
+            elif result is None:
+                # RPC 返回 HTTP 200 但 body 为 null — 需要换节点重试
+                logger.warning(
+                    f"[analyze] {label} attempt {attempt + 1}/{max_retries + 1} "
+                    f"returned None for {tx_hash[:16]}"
+                )
+            elif isinstance(result, dict) and not result.get("blockNumber"):
+                # 部分节点可能返回空 dict 或缺少关键字段
+                if not any(v is not None for v in result.values()):
+                    logger.warning(
+                        f"[analyze] {label} attempt {attempt + 1}/{max_retries + 1} "
+                        f"returned empty-like dict for {tx_hash[:16]}"
+                    )
+                    result = None  # 标记为无效以触发重试
+                else:
+                    return result
+            else:
+                return result
+
+            # 还有剩余次数则重试
+            if attempt < max_retries:
+                logger.info(f"[analyze] Retrying {label} (attempt {attempt + 2})...")
+                await asyncio.sleep(0.3 * (attempt + 1))  # 渐进退避
+                try:
+                    result = await fetch_fn()
+                except Exception as e:
+                    logger.warning(f"[analyze] {label} retry failed: {e}")
+                    result = e
+
+        raise ValueError(
+            f"Failed to get valid {label} after {max_retries + 1} attempts "
+            f"for tx={tx_hash[:16]}. Last value: {result!r}"
+        )
 
     def build_call_tree(self, raw_traces: list[dict]) -> CallNode:
         """
@@ -508,7 +613,9 @@ class TxTraceAnalyzer:
 
         for idx, param in enumerate(indexed_params):
             if idx + 1 < len(topics):
-                field_name = param.split()[0]
+                # 参数格式: "address indexed from" → 取最后一个词作为字段名
+                parts = param.split()
+                field_name = parts[-1] if len(parts) >= 3 else parts[0]
                 decoded[field_name] = "0x" + topics[idx + 1][-40:]
 
         data = log.get("data", "")
@@ -522,9 +629,29 @@ class TxTraceAnalyzer:
 
         return decoded
 
-    def extract_token_flows(self, root: CallNode) -> list[TokenFlowItem]:
-        """从调用树和 Events 中提取 Token 流转记录"""
-        flows: list[TokenFlowItem] = []
+    def extract_call_transfers(self, root: CallNode) -> list:
+        """
+        从 call tree 中提取所有 transfer 函数调用，按调用顺序编号。
+        
+        用于绘制 BlockSec 风格的资金流转图。
+        匹配的函数签名包括:
+          - transfer(address,uint256)
+          - transferFrom(address,address,uint256)
+        """
+        from detectors.trace.models import CallTransferItem
+
+        TRANSFER_SIGS = {
+            "transfer(address,uint256)",
+            "transferfrom(address,address,uint256)",
+        }
+        # 也匹配已知 selector
+        TRANSFER_SELECTORS = {
+            "0xa9059cbb",  # transfer(address,uint256)
+            "0x23b872dd",  # transferFrom(address,address,uint256)
+        }
+
+        transfers: list[CallTransferItem] = []
+        order_id = 0
         visited: set[int] = set()
         stack: list[CallNode] = [root]
 
@@ -535,10 +662,111 @@ class TxTraceAnalyzer:
                 continue
             visited.add(nid)
 
-            # 从 Transfer 事件提取流转信息
+            sig = (node.function_signature or "").lower().strip()
+            sel = (node.selector or "").lower()
+
+            # 仅处理 CALL 类型的 transfer 调用（参考 BlockSec: DELEGATECALL 不绘制）
+            if node.call_type.lower() != "call":
+                stack.extend(reversed(node.children))
+                continue
+
+            if sig in TRANSFER_SIGS or sel in TRANSFER_SELECTORS:
+                order_id += 1
+                # 解析参数
+                from_addr = ""
+                to_addr = ""
+                amount_raw = 0
+
+                if node.params and len(node.params) >= 2:
+                    try:
+                        from_addr = _to_hex(node.params[0].value).lower()  # param_0: to (recipient for transfer)
+                        to_addr = _to_hex(node.params[1].value).lower()    # param_1: amount — wait, let me re-check
+                        # transfer(address,uint256): param_0=to, param_1=amount
+                        # transferFrom(address,address,uint256): param_0=from, param_1=to, param_2=amount
+                        if sig.startswith("transferfrom") or len(node.params) >= 3:
+                            # transferFrom: params are (from, to, amount)
+                            from_addr = _to_hex(node.params[0].value).lower()
+                            to_addr = _to_hex(node.params[1].value).lower()
+                            amt_str = node.params[2].value.replace(",", "") if len(node.params) >= 3 else "0"
+                        else:
+                            # transfer: params are (to, amount), from is the caller
+                            from_addr = node.from_address.lower()  # msg.sender calling transfer
+                            to_addr = _to_hex(node.params[0].value).lower()
+                            amt_str = node.params[1].value.replace(",", "") if len(node.params) >= 2 else "0"
+
+                        amount_raw = int(amt_str) if amt_str else 0
+                    except (ValueError, IndexError):
+                        amount_raw = 0
+
+                    # 格式化金额
+                    decimals = self._protocol_registry.get_token_decimals(
+                        node.to_address
+                    )
+                    divisor = 10 ** (decimals or 18)
+                    if amount_raw > 0:
+                        formatted = f"{amount_raw / divisor:.4f}"
+                        # 千分位格式化整数部分
+                        parts = formatted.split(".")
+                        if len(parts) == 2:
+                            int_part = float(parts[0])
+                            formatted = (
+                                f"{int(int_part):,}.{parts[1]}"
+                                if int_part >= 10000
+                                else formatted
+                            )
+                    else:
+                        formatted = "0"
+
+                    token_sym = (
+                        self._protocol_registry.get_token_symbol(node.to_address)
+                        or ""
+                    )
+
+                    transfers.append(CallTransferItem(
+                        order_id=order_id,
+                        from_address=from_addr,
+                        to_address=to_addr,
+                        amount=amount_raw,
+                        amount_formatted=formatted,
+                        value=node.value,
+                        token_symbol=token_sym,
+                        token_address=node.to_address,
+                        function_signature=node.function_signature or "",
+                        selector=node.selector,
+                        depth=node.depth,
+                        trace_address=list(node.trace_address),
+                        caller_contract=node.to_address,
+                    ))
+
+            stack.extend(reversed(node.children))
+
+        logger.info(f"[call_transfers] Extracted {len(transfers)} transfer calls")
+        return transfers
+
+    def extract_token_flows(self, root: CallNode) -> list[TokenFlowItem]:
+        """
+        从调用树中提取所有 Token 流转记录，按事件出现顺序排列（仿 BlockSec Fund Flow）。
+
+        数据来源: node.events 中关联的 Transfer 事件
+        排序依据: logIndex（receipt logs 原始顺序）
+        输出: 按从上到下的调用/事件顺序排列的流转列表
+        """
+        flows: list[tuple[int, TokenFlowItem]] = []  # (log_index, flow) 用于排序
+
+        # BFS 遍历收集所有 Transfer 事件
+        visited: set[int] = set()
+        queue = [root]
+        while queue:
+            node = queue.pop(0)  # FIFO — 保持调用树从上到下顺序
+            nid = id(node)
+            if nid in visited:
+                continue
+            visited.add(nid)
+
             for ev in node.events:
                 if ev.name != "Transfer" or "value" not in ev.decoded:
                     continue
+
                 from_addr = ev.decoded.get("from", "")
                 to_addr = ev.decoded.get("to", "")
                 amount_str = ev.decoded.get("value", "0")
@@ -546,40 +774,65 @@ class TxTraceAnalyzer:
                     amount = int(amount_str.replace(",", ""))
                 except ValueError:
                     amount = 0
+                if amount == 0:
+                    continue
 
-                token_sym = self._protocol_registry.get_token_symbol(
-                    ev.raw.get("address", "") if ev.raw else ""
-                ) or "UNKNOWN"
+                token_addr = _to_hex(ev.raw.get("address", "") if ev.raw else "")
+                if not token_addr:
+                    continue
+
+                # 获取代币信息
+                token_sym = (
+                    self._protocol_registry.get_token_symbol(token_addr)
+                    or "UNKNOWN"
+                )
+                dec = self._protocol_registry.get_token_decimals(token_addr) or 18
+                divisor = 10 ** dec
+
+                # 格式化金额
+                raw_fmt = f"{amount / divisor:.4f}"
+                parts = raw_fmt.split(".")
+                if len(parts) == 2 and float(parts[0]) >= 10000:
+                    raw_fmt = f"{int(float(parts[0])):,}.{parts[1]}"
+                elif len(parts) == 2 and int(float(parts[0])) > 0:
+                    raw_fmt = f"{int(float(parts[0])):,}.{parts[1]}"
+
+                # 判断方向: 收入(to=root地址) / 支出(其他)
+                is_incoming = to_addr.lower() == root.to_address.lower()
 
                 flow = TokenFlowItem(
-                    token_address=ev.raw.get("address", "")
-                    if ev.raw else "",
+                    token_address=token_addr,
                     token_symbol=token_sym,
-                    decimals=self._protocol_registry.get_token_decimals(
-                        ev.raw.get("address", "") if ev.raw else ""
-                    ),
+                    decimals=dec,
                     amount_raw=amount,
-                    amount_formatted=f"{amount / 1e18:.4f} {token_sym}",
-                    direction="in"
-                    if to_addr.lower() == root.to_address.lower()
-                    else "out",
-                    from_label=self._protocol_registry.get_label(from_addr)
-                    or shorten_addr(from_addr),
-                    to_label=self._protocol_registry.get_label(to_addr)
-                    or shorten_addr(to_addr),
+                    amount_formatted=raw_fmt,
+                    direction="in" if is_incoming else "out",
+                    from_label=(
+                        self._protocol_registry.get_label(from_addr)
+                        or shorten_addr(from_addr)
+                    ),
+                    to_label=(
+                        self._protocol_registry.get_label(to_addr)
+                        or shorten_addr(to_addr)
+                    ),
+                    from_address=from_addr.lower(),
+                    to_address=to_addr.lower(),
                 )
-                flows.append(flow)
+                flows.append((ev.log_index, flow))
 
-            stack.extend(node.children)
+            queue.extend(node.children)
 
-        return flows
+        # 按 log_index 排序，确保与 BlockSec 一致的从上到下顺序
+        flows.sort(key=lambda x: x[0])
+        return [f for _, f in flows]
 
-    def compute_balance_changes(
+    async def compute_balance_changes(
         self,
         root: CallNode,
         tx_from: str,
         tx_to_addr: str | None,
         receipt_logs: list[dict] | None = None,
+        chain_id: int = 1,
     ) -> list[BalanceChangeItem]:
         """
         计算每个地址在每个 Token/ETH 上的净余额变化 (仿 BlockSec Balance Changes)
@@ -588,12 +841,13 @@ class TxTraceAnalyzer:
           1. ETH 余额变化: 从 trace 中每帧的 value 字段汇总 (from 支出, to 收入)
           2. ERC20 余额变化: 优先从 receipt_logs 原始数据提取 (可靠),
              兜底从 node.events 提取 (可能因启发式匹配丢失)
+          3. USD 估值: 通过 TokenPriceCache 从 MarketDataBase 获取实时价格
         """
         from collections import defaultdict
 
         # key = (address_lower, token_address_lower) -> net amount in wei/raw units
         balances: dict[tuple[str, str], int] = defaultdict(int)
-        # token_address -> {symbol, decimals}
+        # token_address -> {symbol, decimals, price_usd, logo_url}
         token_info: dict[str, dict] = {}
 
         # ── 1. ETH 余额变化: 遍历所有 trace 帧的 value ──
@@ -627,44 +881,68 @@ class TxTraceAnalyzer:
                 dec = self._protocol_registry.get_token_decimals(tok_addr)
                 token_info[tok_addr] = {"symbol": sym, "decimals": dec}
 
-        # 2b) 兜底: 从已关联到节点的 events 补充提取
-        visited.clear()
-        stack = [root]
-        while stack:
-            node = stack.pop()
-            nid = id(node)
-            if nid in visited:
-                continue
-            visited.add(nid)
+        # NOTE: 不再从 node.events 补充提取 ERC20 余额变化。
+        # node.events 由 link_events() 从同一批 receipt_logs 生成，
+        # _extract_erc20_balances(2a) 已完整覆盖所有 Transfer 日志，
+        # 若再遍历 node.events 会导致同一事件被重复计数（数值翻倍）。
 
-            for ev in node.events:
-                if ev.name != "Transfer" or "value" not in ev.decoded:
-                    continue
-                fr = ev.decoded.get("from", "").lower()
-                to = ev.decoded.get("to", "").lower()
-                tok_addr = (
-                    _to_hex(ev.raw.get("address", "")).lower() if ev.raw else ""
+        # ── 3. 批量获取代币价格（用于 USD 估值） ──
+        price_map: dict[str, float] = {}  # token_address_lower -> price_usd
+        native_price: float | None = None  # 原生代币价格
+        native_logo: str | None = None     # 原生代币 logo URL
+
+        # 收集所有涉及的 token 地址（排除 ETH，用空串表示）
+        involved_tokens: list[str] = [
+            tok_addr for (addr, tok_addr), net in balances.items()
+            if tok_addr and net != 0
+        ]
+
+        # 判断是否有 ETH 余额变化
+        has_eth_change = any(
+            tok_addr == "" and net != 0
+            for (addr, tok_addr), net in balances.items()
+        )
+
+        if involved_tokens or has_eth_change:
+            try:
+                from detectors.trace.token_price_cache import get_token_price_cache
+                cache = get_token_price_cache()
+                meta_results = await cache.batch_fetch(
+                    chain_id=chain_id,
+                    addresses=[t.lower() for t in set(involved_tokens)],
+                    include_native=has_eth_change,
                 )
-                amount_str = ev.decoded.get("value", "0")
-                try:
-                    amount = int(amount_str.replace(",", ""))
-                except ValueError:
-                    amount = 0
 
-                if amount == 0:
-                    continue
+                # 更新 symbol/decimals/price/logo 信息
+                for addr, meta in meta_results.items():
+                    if not addr:
+                        # 原生代币 (key="")
+                        native_price = meta.price_usd
+                        native_logo = getattr(meta, 'logo_url', None)
+                        continue
+                    addr_lower = addr.lower()
+                    existing = token_info.get(addr_lower, {})
+                    if meta.symbol:
+                        existing["symbol"] = meta.symbol
+                    if meta.decimals:
+                        existing["decimals"] = meta.decimals
+                    if meta.price_usd is not None:
+                        existing["price_usd"] = float(meta.price_usd)
+                    if getattr(meta, 'logo_url', None):
+                        existing["logo_url"] = meta.logo_url
+                    token_info[addr_lower] = existing
+                    if meta.price_usd is not None:
+                        price_map[addr_lower] = float(meta.price_usd)
 
-                balances[(fr, tok_addr)] -= amount
-                balances[(to, tok_addr)] += amount
+                logger.info(
+                    f"[balance_changes] Price lookup: "
+                    f"{len(meta_results)} tokens, {len(price_map)} with prices, "
+                    f"native_price={'%.2f' % native_price if native_price else 'N/A'}"
+                )
+            except Exception as e:
+                logger.warning(f"[balance_changes] Failed to fetch prices: {e}")
 
-                if tok_addr and tok_addr not in token_info:
-                    sym = self._protocol_registry.get_token_symbol(tok_addr) or ""
-                    dec = self._protocol_registry.get_token_decimals(tok_addr)
-                    token_info[tok_addr] = {"symbol": sym, "decimals": dec}
-
-            stack.extend(node.children)
-
-        # ── 3. 构建结果列表, 过滤掉 0 变化项 ──
+        # ── 4. 构建结果列表, 过滤掉 0 变化项 ──
         results: list[BalanceChangeItem] = []
 
         for (addr, tok_addr), net_amount in sorted(balances.items()):
@@ -672,19 +950,26 @@ class TxTraceAnalyzer:
                 continue
 
             if not tok_addr:
-                # ETH
+                # ETH (原生代币)
                 symbol = "ETH"
                 decimals = 18
                 formatted = _format_eth_change(net_amount)
+                value_usd = round(net_amount / 1e18 * (native_price or 0), 2) if native_price else None
+                item_price_usd = native_price
+                item_logo_url = native_logo
             else:
                 info = token_info.get(tok_addr, {})
                 symbol = info.get("symbol") or ""
                 if not symbol:
-                    # 未注册的代币用截断地址作为名称
                     symbol = shorten_addr(tok_addr, width=10).upper()
                 decimals = info.get("decimals", 18)
                 divisor = 10 ** decimals
                 formatted = f"{net_amount / divisor:.4f}"
+                token_lower = tok_addr.lower()
+                token_price = price_map.get(token_lower)
+                value_usd = round(net_amount / divisor * (token_price or 0), 2) if token_price else None
+                item_price_usd = info.get("price_usd")
+                item_logo_url = info.get("logo_url")
 
             label = self._protocol_registry.get_label(addr) or shorten_addr(addr)
 
@@ -696,10 +981,75 @@ class TxTraceAnalyzer:
                 decimals=decimals,
                 amount_raw=net_amount,
                 amount_formatted=formatted,
+                value_usd=value_usd or 0.0,
+                price_usd=item_price_usd,
+                logo_url=item_logo_url,
             ))
 
         logger.info(f"[balance_changes] Computed {len(results)} entries")
         return results
+
+    async def _enrich_token_symbols(self, root: CallNode, chain_id: int) -> None:
+        """
+        用动态数据源补全 CallNode 的 tokenSymbol。
+
+        identify_protocols() 只查询静态 _TOKEN_SYMBOLS 表，
+        很多代币（如 USR、自定义 ERC20）不在其中，导致 call tree 中
+        显示原始地址而非代币符号。
+
+        本方法通过 TokenPriceCache (MarketDataBase) 动态获取 symbol，
+        回填到尚未设置 tokenSymbol 的节点上。
+        """
+        # 1. 收集所有 to_address（排除已有 label 或 token_symbol 的节点）
+        unknown_addrs: set[str] = set()
+        node_by_addr: dict[str, list[CallNode]] = {}
+        visited: set[int] = set()
+        stack: list[CallNode] = [root]
+
+        while stack:
+            node = stack.pop()
+            nid = id(node)
+            if nid in visited:
+                continue
+            visited.add(nid)
+
+            # 只处理没有 label 且没有 token_symbol 的节点
+            if (not node.label and not node.token_symbol
+                    and node.to_address
+                    and len(node.to_address) == 42):
+                addr_lower = node.to_address.lower()
+                unknown_addrs.add(addr_lower)
+                node_by_addr.setdefault(addr_lower, []).append(node)
+
+            stack.extend(reversed(node.children))
+
+        if not unknown_addrs:
+            return
+
+        # 2. 批量从 TokenPriceCache 获取元数据
+        try:
+            from detectors.trace.token_price_cache import get_token_price_cache
+            cache = get_token_price_cache()
+            meta_results = await cache.batch_fetch(
+                chain_id=chain_id,
+                addresses=list(unknown_addrs),
+                include_native=False,
+            )
+
+            enriched_count = 0
+            for addr_lower, meta in meta_results.items():
+                if not addr_lower or not getattr(meta, 'symbol', None):
+                    continue
+                for node in node_by_addr.get(addr_lower, []):
+                    node.token_symbol = meta.symbol
+                    enriched_count += 1
+
+            logger.info(
+                f"[enrich_token] Enriched {enriched_count}/{len(unknown_addrs)} "
+                f"nodes with dynamic token symbols"
+            )
+        except Exception as e:
+            logger.warning(f"[enrich_token] Failed to enrich token symbols: {e}")
 
     @staticmethod
     def _extract_erc20_balances(receipt_logs: list[dict]) -> dict[tuple[str, str], int]:
@@ -776,6 +1126,7 @@ class TxTraceAnalyzer:
         behaviors: list[BehaviorResult],
         protocols: list[ProtocolInfo],
         token_flows: list[TokenFlowItem],
+        call_transfers: list = None,
         balance_changes: list[BalanceChangeItem] | None = None,
         raw_trace_count: int = 0,
         elapsed: float = 0.0,
@@ -807,6 +1158,7 @@ class TxTraceAnalyzer:
             behaviors=behaviors,
             protocols=protocols,
             token_flows=token_flows,
+            call_transfers=call_transfers or [],
             balance_changes=balance_changes or [],
             selector_stats=selector_stats,
         )
