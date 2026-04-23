@@ -78,7 +78,7 @@
         <NodePalette />
 
         <!-- Canvas -->
-        <Canvas @open-test="handleOpenNodeTest" />
+        <Canvas @open-test="handleOpenNodeTest" @paste="handlePasteFromCanvas" />
       </div>
 
       <!-- Empty state when no tabs are open -->
@@ -168,6 +168,7 @@ import { onMounted, onUnmounted, reactive, computed, ref, watch } from 'vue'
 import { useChainDataStore } from '../stores/chainData.js'
 import { useChainEditorStore } from '../stores/chainEditor.js'
 import { useTabStore } from '../stores/tabStore.js'
+import { useClipboardStore } from '../stores/clipboardStore.js'
 import { useNodeTypes } from '../composables/useNodeTypes.js'
 import { useKeyboard } from '../composables/useKeyboard.js'
 import * as chainApi from '../api/ruleChain.js'
@@ -187,6 +188,7 @@ import FieldPicker from '../components/editor/FieldPicker.vue'
 const chainDataStore = useChainDataStore()
 const editorStore = useChainEditorStore()
 const tabStore = useTabStore()
+const clipboardStore = useClipboardStore()
 
 // Test run panel
 const showTestRun = ref(false)
@@ -483,6 +485,31 @@ function handleOpenNodeTest(nodeId) {
   testNodeId.value = nodeId
 }
 
+/** 从 Canvas 组件接收粘贴事件，显示 toast */
+function handlePasteFromCanvas() {
+  if (clipboardStore.hasContent) {
+    const sourceName = clipboardStore.sourceChainName || '未知来源'
+    showToast(`已粘贴 ${clipboardStore.nodes.length} 个节点（来自: ${sourceName}）`, 'success')
+  }
+}
+
+/** Ctrl+V 快捷键触发的粘贴：从剪贴板读取并添加到当前画布 */
+function handleKeyboardPaste() {
+  if (!clipboardStore.hasContent) return
+  const { newNodes, newEdges, newNodeIds } = clipboardStore.paste(40, 40)
+  if (newNodes.length === 0) return
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
+  chainDataStore.markDirty()
+
+  // 选中新粘贴的节点
+  editorStore.setSelectedNodes(newNodeIds)
+
+  const sourceName = clipboardStore.sourceChainName || '未知来源'
+  showToast(`已粘贴 ${newNodes.length} 个节点（来自: ${sourceName}）`, 'success')
+}
+
 /** 获取目标节点显示标签 */
 function getTargetNodeLabel(nodeId) {
   if (!nodeId) return ''
@@ -568,6 +595,7 @@ watch(() => chainDataStore.isModified, (mod) => {
 useKeyboard({
   onSave: handleSave,
   onToast: showToast,
+  onPaste: handleKeyboardPaste,
 })
 
 // Initialize

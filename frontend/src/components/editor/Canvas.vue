@@ -109,8 +109,10 @@
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @mousedown.stop
     >
-      <div class="context-menu-item danger" @click="deleteSelectedNodes">删除选中</div>
       <div class="context-menu-item copy" @click="duplicateSelectedNodes">复制选中</div>
+      <div class="context-menu-item copy" @click="copySelectedToClipboard">复制到剪贴板</div>
+      <div class="context-menu-item" :class="{ disabled: !clipboardStore.hasContent }" @click="pasteFromClipboard">粘贴</div>
+      <div class="context-menu-item danger" @click="deleteSelectedNodes">删除选中</div>
       <div class="context-menu-item" @click="cancelSelection">取消选择</div>
     </div>
 
@@ -122,6 +124,16 @@
       @mousedown.stop
     >
       <div class="context-menu-item danger" @click="deleteEdgeFromMenu">删除连线</div>
+    </div>
+
+    <!-- Context menu for canvas (right-click on empty area) -->
+    <div
+      v-if="canvasContextMenu.visible"
+      class="context-menu"
+      :style="{ left: canvasContextMenu.x + 'px', top: canvasContextMenu.y + 'px' }"
+      @mousedown.stop
+    >
+      <div class="context-menu-item" :class="{ disabled: !clipboardStore.hasContent }" @click="pasteFromCanvasMenu">粘贴</div>
     </div>
 
     <!-- Zoom controls -->
@@ -157,6 +169,7 @@ import { ref, computed, reactive } from 'vue'
 import { useChainDataStore } from '../../stores/chainData.js'
 import { useChainEditorStore } from '../../stores/chainEditor.js'
 import { useNodeTypesStore } from '../../stores/nodeTypes.js'
+import { useClipboardStore } from '../../stores/clipboardStore.js'
 import { useConnection } from '../../composables/useConnection.js'
 import { useDragDrop } from '../../composables/useDragDrop.js'
 import { getPortPosition } from '../../utils/geometry.js'
@@ -165,12 +178,13 @@ import NodeCard from './NodeCard.vue'
 import TempEdge from './TempEdge.vue'
 import EdgeTransformerPanel from './EdgeTransformerPanel.vue'
 
-const emit = defineEmits(['edgeCreated', 'edgeInvalid', 'openTest', 'openFieldPicker'])
+const emit = defineEmits(['edgeCreated', 'edgeInvalid', 'openTest', 'openFieldPicker', 'paste'])
 
 const canvasRef = ref(null)
 const chainDataStore = useChainDataStore()
 const editorStore = useChainEditorStore()
 const nodeTypesStore = useNodeTypesStore()
+const clipboardStore = useClipboardStore()
 
 const nodes = computed(() => chainDataStore.nodes)
 const edges = computed(() => chainDataStore.edges)
@@ -295,6 +309,8 @@ const fixedRectH = ref(0)
 const contextMenu = reactive({ visible: false, x: 0, y: 0 })
 /** 连线右键菜单：记录目标 edge 引用，用于删除 */
 const edgeContextMenu = reactive({ visible: false, x: 0, y: 0, targetEdgeId: null })
+/** 画布空白区域右键菜单：仅提供粘贴选项 */
+const canvasContextMenu = reactive({ visible: false, x: 0, y: 0, canvasX: 0, canvasY: 0 })
 
 const fixedSelectionRectStyle = computed(() => {
   if (!fixedRectVisible.value) return {}
@@ -352,6 +368,7 @@ function onMouseDown(e) {
   // Close context menu on any click
   contextMenu.visible = false
   edgeContextMenu.visible = false
+  canvasContextMenu.visible = false
 
   // Shift + Left button: start selection rectangle
   if (e.button === 0 && e.shiftKey) {
@@ -499,6 +516,7 @@ function onCanvasClick() {
     editorStore.setSelectedNodes([])
     contextMenu.visible = false
     edgeContextMenu.visible = false
+    canvasContextMenu.visible = false
     return
   }
   // 如果刚完成框选操作，跳过本次 click（click 在 mouseup 之后触发，会清除刚设置的选中状态）
@@ -507,6 +525,7 @@ function onCanvasClick() {
   fixedRectVisible.value = false
   contextMenu.visible = false
   edgeContextMenu.visible = false
+  canvasContextMenu.visible = false
 }
 
 // ─── Fixed selection rect drag ───
@@ -588,6 +607,16 @@ function onContextMenu(e) {
       return
     }
   }
+  // 如果没有框选，在空白区域右键显示画布菜单（提供粘贴选项）
+  if (clipboardStore.hasContent) {
+    const canvasPos = screenToCanvas(e.clientX, e.clientY)
+    canvasContextMenu.x = e.clientX - canvasRef.value.getBoundingClientRect().left
+    canvasContextMenu.y = e.clientY - canvasRef.value.getBoundingClientRect().top
+    canvasContextMenu.canvasX = canvasPos.x
+    canvasContextMenu.canvasY = canvasPos.y
+    canvasContextMenu.visible = true
+    return
+  }
   // Default: clear selection
   fixedRectVisible.value = false
   editorStore.setSelectedNodes([])
@@ -638,6 +667,62 @@ function duplicateSelectedNodes() {
   // 标记粘贴态：下次任意点击解除副本选中
   justDuplicated = true
   contextMenu.visible = false
+}
+
+/** 复制选中节点到跨标签页剪贴板 */
+function copySelectedToClipboard() {
+  const ids = selectedNodeIds.value.length > 0
+    ? selectedNodeIds.value
+    : (selectedNodeId.value ? [selectedNodeId.value] : [])
+  if (ids.length === 0) return
+
+  const selectedNodes = nodes.value.filter(n => ids.includes(n.id))
+  clipboardStore.copy(
+    selectedNodes,
+    edges.value,
+    chainDataStore.currentChainId,
+    chainDataStore.chainName
+  )
+  contextMenu.visible = false
+  emit('paste')  // 通知父组件显示 toast
+}
+
+/** 从剪贴板粘贴到当前画布（偏移粘贴） */
+function pasteFromClipboard() {
+  if (!clipboardStore.hasContent) return
+  const { newNodes, newEdges, newNodeIds } = clipboardStore.paste(40, 40)
+  if (newNodes.length === 0) return
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
+  chainDataStore.markDirty()
+
+  // 选中新粘贴的节点
+  editorStore.setSelectedNodes(newNodeIds)
+  justDuplicated = true
+  contextMenu.visible = false
+  canvasContextMenu.visible = false
+  emit('paste')
+}
+
+/** 从画布右键菜单粘贴（粘贴到右键点击位置） */
+function pasteFromCanvasMenu() {
+  if (!clipboardStore.hasContent) return
+  const { newNodes, newEdges, newNodeIds } = clipboardStore.pasteAt(
+    canvasContextMenu.canvasX,
+    canvasContextMenu.canvasY
+  )
+  if (newNodes.length === 0) return
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
+  chainDataStore.markDirty()
+
+  // 选中新粘贴的节点
+  editorStore.setSelectedNodes(newNodeIds)
+  justDuplicated = true
+  canvasContextMenu.visible = false
+  emit('paste')
 }
 
 function onDrop(event) {
@@ -784,5 +869,10 @@ function onEditExpression({ x, y }, edge) {
 .context-menu-item.copy:hover {
   background: rgba(34, 197, 94, 0.15);
   color: #4ade80;
+}
+.context-menu-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 </style>

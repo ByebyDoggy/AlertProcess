@@ -372,7 +372,7 @@ export const useChainDataStore = defineStore('chainData', () => {
     currentChain, isModified,
     fetchChains, loadChain, createNew,
     addNode, removeNode, updateNode, updateNodeConfig, updateNodePosition,
-    duplicateNodes,
+    duplicateNodes, markDirty,
     addEdge, removeEdge, updateEdge,
     save, deleteChain, clearCanvas, toggleChainEnabled,
     // 节点测试
