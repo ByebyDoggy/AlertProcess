@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from nodes.base import NodeRegistry
-from nodes.detectors.base import BaseDetector
+from pydantic import Field
+
+from nodes.base import NodeRegistry, score_to_severity
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
 
 KNOWN_FLASH_LOAN_PROTOCOLS: dict[str, str] = {
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": "Aave V2",
@@ -23,6 +26,11 @@ FLASH_LOAN_METHOD_SIGS: dict[str, str] = {
 }
 
 
+class FlashLoanOutput(DetectorOutputMixin):
+    """闪电贷检测器输出"""
+    pass
+
+
 class FlashLoanDetector(BaseDetector):
     """
     闪电贷检测器 — 检测闪电贷攻击和可疑闪电贷模式。
@@ -36,28 +44,20 @@ class FlashLoanDetector(BaseDetector):
 
     name: str = "flash_loan_detector"
     label: str = "闪电贷检测"
-    description: str = "检测闪电贷攻击和可疑闪电贷模式"
+    description: str = "检测闪电贷攻击：通过已知协议地址（Aave/dYdX/Uniswap/Compound）和方法签名（flash/flashLoan/flashswap）识别。大额闪电贷交互给 95 分，纯方法签名 60 分"
     icon: str = "\u26a1"
     color: str = "#ef4444"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {"type": "number", "minimum": 0, "maximum": 100, "default": 50},
-                "large_flash_loan_threshold_usd": {"type": "number", "default": 100000.0},
-                "chain_id_to_native_token_price": {"type": "object", "default": {1: 2000, 56: 300, 137: 1}},
-            },
-        }
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        large_flash_loan_threshold_usd: float = Field(default=100000.0, ge=0, description="大额闪电贷阈值（USD）")
+        chain_id_to_native_token_price: dict[str, float] = Field(
+            default={1: 2000.0, 56: 300.0, 137: 1.0},
+            description="原生代币价格映射",
+        )
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 50,
-            "large_flash_loan_threshold_usd": 100000.0,
-            "chain_id_to_native_token_price": {1: 2000.0, 56: 300.0, 137: 1.0},
-        }
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = FlashLoanOutput
 
     @staticmethod
     def _has_flash_loan_method(input_data: str) -> bool:
@@ -71,18 +71,11 @@ class FlashLoanDetector(BaseDetector):
             return None
         return KNOWN_FLASH_LOAN_PROTOCOLS.get(to_address.lower())
 
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
-        to_address = context.get("to_address", "")
-        input_data = context.get("input_data", "")
-        value = context.get("value", 0)
-        chain_id = context.get("chain_id", 1)
-
-        # value 可能是字符串（JSON 存储），转换为 int
-        if isinstance(value, str):
-            try:
-                value = int(value)
-            except (ValueError, TypeError):
-                value = 0
+    async def process(self, tx_context: TransactionContext) -> FlashLoanOutput:
+        to_address = tx_context.to_address or ""
+        input_data = tx_context.input_data or ""
+        value = tx_context.value or 0
+        chain_id = tx_context.chain_id or 1
 
         issues: list[str] = []
         score = 0.0
@@ -113,17 +106,22 @@ class FlashLoanDetector(BaseDetector):
             score = 50
 
         labels = issues if score >= self.config.get("threshold", 50) else []
+        threshold = self.config.get("threshold", 50.0)
 
-        return score, {
-            "to_address": to_address,
-            "value": value,
-            "value_usd": round(value_usd, 2),
-            "protocol": protocol,
-            "has_flash_loan_method": has_method,
-            "is_large": is_large,
-            "detected_issues": issues,
-            "labels": labels,
-        }
+        return FlashLoanOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels,
+            detection={
+                "to_address": to_address,
+                "value": value,
+                "value_usd": round(value_usd, 2),
+                "protocol": protocol,
+                "has_flash_loan_method": has_method,
+                "is_large": is_large,
+                "detected_issues": issues,
+                "labels": labels,
+            },
+        )
 
 
 NodeRegistry.register(FlashLoanDetector)

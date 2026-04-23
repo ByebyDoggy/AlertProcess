@@ -4,9 +4,11 @@ Based on Forta-inspired architecture with pluggable detectors and rules
 """
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field
-from web3.types import TxData
+
+if TYPE_CHECKING:
+    from web3.types import TxData
 
 
 class SeverityEnum(str, Enum):

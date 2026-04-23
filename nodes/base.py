@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
 
 # ---------------------------------------------------------------------------
@@ -36,12 +36,14 @@ class PortDef(BaseModel):
         data_type:   数据类型约束，校验器会检查上下游兼容性
         required:    是否必须连接
         multi:       是否允许连接多条边（多输入场景）
+        description: 端口用途说明（前端 tooltip 显示）
     """
     key: str
     label: str
     data_type: str = "any"
     required: bool = False
     multi: bool = False
+    description: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +53,14 @@ class PortDef(BaseModel):
 class NodeCategory(Enum):
     """节点分类 — 对应前端节点面板的分组"""
     INPUT = "input"
+    PROVIDER = "provider"
     DETECTION = "detection"
     COMPARISON = "comparison"
     SCORING = "scoring"
     LOGIC = "logic"
     ACTION = "action"
+    MEMORY = "memory"
+    SCRIPTING = "scripting"
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +69,7 @@ class NodeCategory(Enum):
 
 class NodeOutput(BaseModel):
     """
-    所有节点的统一输出模型。
+    所有节点的统一运行时输出模型（引擎内部使用）。
 
     - Detector:    score 0-100（风险评分）
     - Comparator:  score 100（满足）/ 0（不满足）
@@ -84,6 +89,24 @@ class NodeOutput(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# 节点 Pydantic 输出/输入 Mixin（类外定义，供子类继承扩展）
+# ---------------------------------------------------------------------------
+
+class NodeOutputMixin(BaseModel):
+    """
+    所有节点的默认输出数据结构 Mixin。
+
+    子类（各类别基类 OutputMixin）继承此模型并扩展字段。
+    与 NodeOutput（运行时模型）分离，NodeOutputMixin 描述 process() 返回值。
+    """
+    score: float = Field(ge=0.0, le=100.0, default=0.0)
+    passed: bool = True
+    severity: str = "UNKNOWN"
+    labels: list[str] = Field(default_factory=list)
+    detection: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # 数据类型兼容性矩阵 — 校验引擎使用
 # ---------------------------------------------------------------------------
 
@@ -94,16 +117,21 @@ ALLOWED_TYPE_MAPPING: dict[str, set[str]] = {
     "comparison_output":  {"comparison_output", "any"},
     "score_output":       {"detection_output", "score_output", "any"},
     "logic_output":       {"logic_output", "comparison_output", "any"},
+    "memory_output":      {"memory_output", "context", "any"},
+    "script_output":      {"script_output", "detection_output", "score_output", "comparison_output", "logic_output", "any"},
 }
 
 # 各节点分类允许接收的输入 data_type
 CATEGORY_ALLOWED_INPUTS: dict[NodeCategory, set[str]] = {
     NodeCategory.INPUT:      set(),  # Trigger 无输入
+    NodeCategory.PROVIDER:   {"context", "any"},
     NodeCategory.DETECTION:  {"context", "any"},
     NodeCategory.COMPARISON: {"detection_output", "score_output"},
     NodeCategory.SCORING:    {"detection_output", "score_output"},
-    NodeCategory.LOGIC:      {"comparison_output", "logic_output"},
+    NodeCategory.LOGIC:      {"comparison_output", "logic_output", "context", "memory_output", "any"},
     NodeCategory.ACTION:     {"any"},
+    NodeCategory.MEMORY:     {"detection_output", "score_output", "context", "any"},
+    NodeCategory.SCRIPTING:  {"detection_output", "score_output", "context", "any"},
 }
 
 
@@ -149,6 +177,11 @@ class BaseNode(ABC):
     上下文声明:
       通过 @require("provider_name") 装饰器声明额外上下文需求。
       未标注的节点默认只使用 eth_logs 上下文（零 API 调用）。
+
+    Pydantic 模型声明:
+      - ConfigModel:  节点配置参数模型 → 自动派生 get_config_schema / get_default_config / validate_config
+      - OutputModel:  节点输出数据结构 → 自动派生 get_output_schema → 前端展示 + 边级 Transformer 提示
+      - InputModel:   节点期望输入结构 → 自动派生 get_input_schema → 前端映射 UI
     """
 
     name: ClassVar[str]
@@ -160,6 +193,19 @@ class BaseNode(ABC):
 
     # @require 装饰器设置的上下文需求
     __required_providers__: ClassVar[tuple[str, ...]] = ()
+
+    # ── Pydantic 配置模型 (子类可选覆盖) ──
+    # 子类定义 ConfigModel 后，get_config_schema / get_default_config / validate_config
+    # 自动从 Pydantic model 派生，无需手写 dict schema
+    ConfigModel: type[BaseModel] | None = None
+
+    # ── Pydantic 输出/输入模型 (子类可选覆盖) ──
+    # 方式 A（多端口节点）：定义 InputModels / OutputModels 列表，每个元素对应一个端口
+    InputModels: list[type[BaseModel]] | None = None
+    OutputModels: list[type[BaseModel]] | None = None
+    # 方式 B（单端口节点，兼容旧写法）：定义单一模型
+    InputModel: type[BaseModel] | None = None
+    OutputModel: type[BaseModel] = NodeOutputMixin
 
     # 实例属性（每个节点实例独立）
     node_id: str = ""
@@ -183,13 +229,147 @@ class BaseNode(ABC):
 
     @classmethod
     def get_config_schema(cls) -> dict[str, Any]:
-        """返回 JSON Schema 格式的配置定义（供前端动态渲染）"""
+        """
+        返回 JSON Schema 格式的配置定义（供前端动态渲染）。
+
+        优先级:
+          1. 如果子类定义了 ConfigModel (Pydantic)，自动从 model 生成 JSON Schema
+          2. 否则返回空 dict（子类可重写此方法返回手写 schema）
+        """
+        if cls.ConfigModel is not None:
+            return cls._pydantic_config_schema()
         return {}
 
     @classmethod
     def get_default_config(cls) -> dict[str, Any]:
-        """返回默认配置"""
+        """
+        返回默认配置。
+
+        优先级:
+          1. ConfigModel 存在 → 从 Pydantic model 的 default 值构建
+          2. 否则返回空 dict（子类可重写）
+        """
+        if cls.ConfigModel is not None:
+            try:
+                instance = cls.ConfigModel()
+                # 使用 model_dump 排除未设置的字段，只保留有默认值的字段
+                return instance.model_dump(exclude_unset=False)
+            except Exception:
+                return {}
         return {}
+
+    def validate_config(self, config: dict[str, Any]) -> list[str]:
+        """
+        校验配置，返回错误列表（空列表表示合法）。
+
+        优先级:
+          1. ConfigModel 存在 → 用 Pydantic 校验，返回结构化错误
+          2. 否则调用子类重写的 validate_config 方法（默认返回空列表）
+        """
+        if self.ConfigModel is not None:
+            try:
+                self.ConfigModel(**config)
+                return []
+            except PydanticValidationError as e:
+                return [f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}"
+                        for err in e.errors()]
+        return []
+
+    @classmethod
+    def _pydantic_config_schema(cls) -> dict[str, Any]:
+        """从 ConfigModel 生成前端兼容的 JSON Schema。"""
+        raw = cls.ConfigModel.model_json_schema()
+        # 转换为前端期望的简化格式: { type, properties: { field: { type, default, ... } } }
+        props = raw.get("properties", {})
+        result_props = {}
+        for key, val in props.items():
+            entry = {"type": val.get("type", "string")}
+            if "default" in val:
+                entry["default"] = val["default"]
+            if "description" in val and val["description"]:
+                entry["description"] = val["description"]
+            if "minimum" in val:
+                entry["minimum"] = val["minimum"]
+            if "maximum" in val:
+                entry["maximum"] = val["maximum"]
+            if "enum" in val:
+                entry["enum"] = val["enum"]
+            # 透传 x-editor 扩展（Pydantic json_schema_extra）
+            if "x-editor" in val:
+                entry["x-editor"] = val["x-editor"]
+            result_props[key] = entry
+
+        return {
+            "type": "object",
+            "properties": result_props,
+        }
+
+    @classmethod
+    def _resolve_models(cls) -> tuple[list[type[BaseModel]], list[type[BaseModel]]]:
+        """
+        解析实际的输入/输出模型列表。
+
+        优先使用 InputModels/OutputModels（list），否则从单值 InputModel/OutputModel 包装为 list。
+
+        Returns:
+            (input_models_list, output_models_list) — 长度与 get_inputs()/get_outputs() 一一对应
+        """
+        # 解析输入模型
+        if cls.InputModels is not None:
+            in_models = cls.InputModels
+        elif cls.InputModel is not None:
+            in_models = [cls.InputModel]
+        else:
+            in_models = []
+
+        # 解析输出模型
+        if cls.OutputModels is not None:
+            out_models = cls.OutputModels
+        else:
+            out_models = [cls.OutputModel]
+
+        return in_models, out_models
+
+    @classmethod
+    def get_input_schemas(cls) -> list[dict[str, Any]]:
+        """
+        返回每个输入端口对应的 JSON Schema 列表。
+
+        长度与 get_inputs() 一致，index 对齐。
+        """
+        models, _ = cls._resolve_models()
+        return [m.model_json_schema() for m in models]
+
+    @classmethod
+    def get_output_schemas(cls) -> list[dict[str, Any]]:
+        """
+        返回每个输出端口对应的 JSON Schema 列表。
+
+        长度与 get_outputs() 一致，index 对齐。
+        """
+        _, models = cls._resolve_models()
+        return [m.model_json_schema() for m in models]
+
+    @classmethod
+    def get_output_schema(cls) -> dict[str, Any]:
+        """
+        从 OutputModel 生成 JSON Schema（供前端展示 + 边级 Transformer 提示）。
+
+        当 OutputModels 存在时返回第一个输出模型的 schema；否则从单值 OutputModel 生成。
+        """
+        schemas = cls.get_output_schemas()
+        return schemas[0] if schemas else {}
+
+    @classmethod
+    def get_input_schema(cls) -> dict[str, Any]:
+        """
+        从 InputModel 生成 JSON Schema（供前端映射 UI）。
+
+        当 InputModels 存在时返回第一个输入模型的 schema；否则从单值 InputModel 生成。
+        InputModel 不存在时返回空 dict。
+        """
+        schemas = cls.get_input_schemas()
+        return schemas[0] if schemas else {}
 
     @classmethod
     def get_required_providers(cls) -> tuple[str, ...]:
@@ -214,10 +394,6 @@ class BaseNode(ABC):
             inputs:  上游节点输出 { port_key: [NodeOutput, ...] }
         """
         ...
-
-    def validate_config(self, config: dict[str, Any]) -> list[str]:
-        """校验配置，返回错误列表（空列表表示合法）"""
-        return []
 
     # ------------------------------------------------------------------
     # 辅助方法
@@ -298,6 +474,9 @@ class NodeRegistry:
         - outputs: 端口定义列表
         - config_schema: JSON Schema
         - default_config: 默认配置
+        - input_schemas: 每个输入端口对应的 JSON Schema 列表（index 与 inputs 对齐）
+        - output_schemas: 每个输出端口对应的 JSON Schema 列表（index 与 outputs 对齐）
+        - input_schema / output_schema: 旧字段（返回第一个端口的 schema），保留兼容
         """
         result = []
         for name, node_class in sorted(cls._nodes.items()):
@@ -312,7 +491,10 @@ class NodeRegistry:
                 "outputs": [p.model_dump() for p in node_class.get_outputs()],
                 "config_schema": node_class.get_config_schema(),
                 "default_config": node_class.get_default_config(),
-                "required_providers": list(node_class.get_required_providers()),
+                "input_schemas": node_class.get_input_schemas(),
+                "output_schemas": node_class.get_output_schemas(),
+                "input_schema": node_class.get_input_schema(),
+                "output_schema": node_class.get_output_schema(),
             })
         return result
 

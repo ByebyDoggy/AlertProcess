@@ -30,6 +30,7 @@ class ParsedEdge:
     source_port: str = "output"  # 输出端口 key: "output" / "true" / "false"
     target_id: str = ""
     target_port: str = "input"   # 输入端口 key: "input" / "input_0" / "input_1" / ...
+    input_transformer: dict[str, Any] | None = None  # {"expression": "...", "language": "python"|"javascript"}
 
 
 @dataclass
@@ -132,12 +133,14 @@ class ChainParser:
 
         parsed_edges = []
         for raw in raw_edges:
+            raw_transformer = raw.get("inputTransformer") or raw.get("input_transformer")
             parsed_edges.append(ParsedEdge(
                 edge_id=raw.get("id", raw.get("edgeId", "")),
                 source_id=raw.get("source", raw.get("sourceNodeId", "")),
                 source_port=raw.get("sourcePort", raw.get("sourceHandle", "output")),
                 target_id=raw.get("target", raw.get("targetNodeId", "")),
                 target_port=raw.get("targetPort", raw.get("targetHandle", "input")),
+                input_transformer=raw_transformer,
             ))
 
         return ParsedChain(nodes=parsed_nodes, edges=parsed_edges)
@@ -163,6 +166,7 @@ class ChainParser:
                     "sourcePort": e.source_port,
                     "target": e.target_id,
                     "targetPort": e.target_port,
+                    "inputTransformer": e.input_transformer,
                 }
                 for e in chain.edges
             ],

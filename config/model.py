@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     risk_check_enabled: bool = True
     risk_check_default_score: str = "PENDING"
 
-    # Moralis API配置
-    moralis_api_key: Optional[str] = None
+    # Moralis API 配置（支持多 Key 轮换，优先级从高到低自动切换）
+    # 兼容旧格式：单个字符串；新格式：JSON 数组 ["key1", "key2"]
+    moralis_api_key: Optional[str | list[str]] = None
 
     # ARKM API配置
     arkm_cookie: Optional[str] = None
@@ -53,6 +54,16 @@ class Settings(BaseSettings):
     # 也支持 Python dict 格式 (通过代码设置)
     apipool_pool_map: dict = {}
 
+    # ── Moralis API Key 池 (从 apipool-server 加载) ──
+    # 指定 apipool-server 上存储 Moralis API Key 的 pool identifier
+    moralis_pool_identifier: Optional[str] = None      # e.g. "moralis-keys"
+
+    # ── 区块时间配置（用于地址年龄的区块差估算） ──
+    # JSON 字符串格式: {"1": 12, "56": 3, "137": 2}
+    # key=chain_id, value=单块时间(秒)
+    # 未配置的链使用默认值，也可通过前端页面修改
+    block_time_config: dict = {}
+
     # 日志接收 (EVMLogListener → AlertProcessor) 配置
     ingest_enabled: bool = True
     ingest_max_batch_size: int = 5000       # 单次推送最大日志数
@@ -66,12 +77,14 @@ class Settings(BaseSettings):
         extra = "ignore"
 
     def model_post_init(self, __context) -> None:
-        """解析 apipool_pool_map 的 JSON 字符串格式"""
-        if isinstance(self.apipool_pool_map, str):
-            try:
-                self.apipool_pool_map = json.loads(self.apipool_pool_map)
-            except (json.JSONDecodeError, TypeError):
-                self.apipool_pool_map = {}
+        """解析 apipool_pool_map / block_time_config 的 JSON 字符串格式"""
+        for attr in ("apipool_pool_map", "block_time_config"):
+            val = getattr(self, attr)
+            if isinstance(val, str):
+                try:
+                    setattr(self, attr, json.loads(val))
+                except (json.JSONDecodeError, TypeError):
+                    setattr(self, attr, {})
 
     # ── .env 持久化 ──
 

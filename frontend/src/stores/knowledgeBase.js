@@ -92,9 +92,12 @@ export const useKnowledgeBaseStore = defineStore('knowledgeBase', () => {
   async function fetchSampleDetail(id) {
     loadingDetail.value = true
     try {
-      currentSample.value = await getSample(id)
+      const sample = await getSample(id)
+      currentSample.value = sample
+      return sample
     } catch (e) {
       console.error('Failed to fetch sample detail:', e)
+      return null
     } finally {
       loadingDetail.value = false
     }

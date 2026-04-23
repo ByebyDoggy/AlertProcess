@@ -34,11 +34,14 @@ export const useNodeTypesStore = defineStore('nodeTypes', () => {
   const categories = computed(() => {
     const labels = {
       input: '输入',
+      provider: '上下文查询',
       detection: '安全检测',
       comparison: '比较',
       scoring: '评分',
       logic: '逻辑',
       action: '动作',
+      memory: '记忆',
+      scripting: '脚本',
     }
     return Object.keys(groupedByCategory.value).map(cat => ({
       key: cat,

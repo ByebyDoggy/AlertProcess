@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import Field, model_validator
+
 from nodes.base import NodeRegistry, score_to_severity
-from nodes.detectors.base import BaseDetector
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
+
+
+class GasPriceOutput(DetectorOutputMixin):
+    """Gas 价格检测器输出"""
+    pass
 
 
 class GasPriceDetector(BaseDetector):
@@ -20,82 +28,46 @@ class GasPriceDetector(BaseDetector):
 
     name: str = "gas_price_detector"
     label: str = "Gas 价格检测"
-    description: str = "检测异常高的 Gas 费用"
+    description: str = "检测交易 Gas 费用是否异常高（如抢 Front-run 或攻击行为）。根据 gas_price × gas_used 计算 USD 成本，支持多链原生代币价格映射，极端 Gas 给 95 分"
     category_var: Any = None  # 使用基类的 category
     icon: str = "\u26fd"
     color: str = "#f59e0b"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {
-                    "type": "number", "minimum": 0, "maximum": 100,
-                    "default": 50, "description": "passed 阈值"
-                },
-                "high_gas_threshold_usd": {
-                    "type": "number", "minimum": 0,
-                    "default": 100.0, "description": "高 Gas 阈值（USD）"
-                },
-                "extreme_gas_threshold_usd": {
-                    "type": "number", "minimum": 0,
-                    "default": 500.0, "description": "极端 Gas 阈值（USD）"
-                },
-                "chain_id_to_native_token_price": {
-                    "type": "object",
-                    "description": "原生代币价格映射（chain_id -> USD）",
-                    "default": {"1": 2000.0, "56": 700.0, "137": 1.0}
-                },
-            },
-        }
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        high_gas_threshold_usd: float = Field(default=100.0, ge=0, description="高 Gas 阈值（USD）")
+        extreme_gas_threshold_usd: float = Field(default=500.0, ge=0, description="极端 Gas 阈值（USD）")
+        chain_id_to_native_token_price: dict[str, float] = Field(
+            default={1: 2000.0, 56: 700.0, 137: 1.0},
+            description="原生代币价格映射（chain_id -> USD）",
+        )
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 50,
-            "high_gas_threshold_usd": 100.0,
-            "extreme_gas_threshold_usd": 500.0,
-            "chain_id_to_native_token_price": {1: 2000.0, 56: 700.0, 137: 1.0},
-        }
+        @model_validator(mode='after')
+        def _check_thresholds(self):
+            if self.extreme_gas_threshold_usd <= self.high_gas_threshold_usd:
+                raise ValueError(
+                    "extreme_gas_threshold_usd must be > high_gas_threshold_usd"
+                )
+            return self
 
-    def validate_config(self, config: dict[str, Any]) -> list[str]:
-        errors = []
-        high = config.get("high_gas_threshold_usd", 100.0)
-        extreme = config.get("extreme_gas_threshold_usd", 500.0)
-        if high <= 0:
-            errors.append("high_gas_threshold_usd must be > 0")
-        if extreme <= high:
-            errors.append("extreme_gas_threshold_usd must be > high_gas_threshold_usd")
-        threshold = config.get("threshold", 50)
-        if not (0 <= threshold <= 100):
-            errors.append("threshold must be between 0 and 100")
-        return errors
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = GasPriceOutput
 
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
-        gas_price_wei = context.get("gas_price")
-        gas_used = context.get("gas_used", 21000)
+    async def process(self, input: DetectorInputMixin) -> GasPriceOutput:
+        gas_price_wei = input.gas_price
+        gas_used = input.gas_used or 21000
 
-        # gas_price 和 gas_used 可能是字符串，转换为 int
-        if isinstance(gas_price_wei, str):
-            try:
-                gas_price_wei = int(gas_price_wei)
-            except (ValueError, TypeError):
-                gas_price_wei = None
-        if isinstance(gas_used, str):
-            try:
-                gas_used = int(gas_used)
-            except (ValueError, TypeError):
-                gas_used = 21000
-
-        if gas_price_wei is None:
-            # 尝试使用 gas_price_gwei
-            gas_price_gwei = context.get("gas_price_gwei", 0)
+        if not gas_price_wei:
+            # 尝试使用 extra 中的 gas_price_gwei
+            gas_price_gwei = input.get_extra("gas_price_gwei", 0)
             gas_price_wei = int(gas_price_gwei * 10**9)
             if gas_price_wei == 0:
-                return 0.0, {"error": "gas_price not available in context"}
+                return GasPriceOutput(
+                    score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                    detection={"error": "gas_price not available in context"}
+                )
 
-        chain_id = context.get("chain_id", 1)
+        chain_id = input.chain_id or 1
         price_map = self.config.get("chain_id_to_native_token_price", {})
         native_price = price_map.get(str(chain_id), price_map.get(chain_id, 0))
 
@@ -121,6 +93,8 @@ class GasPriceDetector(BaseDetector):
 
         score = max(0.0, min(100.0, score))
         labels = ["high_gas"] if score >= 50 else []
+        threshold = self.config.get("threshold", 50.0)
+        from nodes.base import score_to_severity
 
         details: dict[str, Any] = {
             "gas_price_wei": gas_price_wei,
@@ -133,7 +107,10 @@ class GasPriceDetector(BaseDetector):
             "native_token_price": native_price,
             "labels": labels,
         }
-        return score, details
+        return GasPriceOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels, detection=details,
+        )
 
 
 NodeRegistry.register(GasPriceDetector)

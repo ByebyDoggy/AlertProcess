@@ -98,7 +98,11 @@ const showPortManager = computed(() => {
 watch(() => props.visible, (v) => {
   if (v && props.node) {
     formData.label = props.node.label
-    formData.config = deepClone(props.node.config || {})
+    // 以 default_config 为基础，再覆盖用户已保存的配置值
+    // 这样当后端修改默认值时，新节点自动使用新默认值
+    const defaults = deepClone(nodeType.value?.default_config || {})
+    const saved = deepClone(props.node.config || {})
+    formData.config = { ...defaults, ...saved }
   }
 })
 

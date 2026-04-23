@@ -25,8 +25,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from detectors.trace.rule_engine import IngestedLog, TxLogsGroup, MatchedAlert
+from detectors.trace.rule_engine import IngestedLog, TxLogsGroup, MatchedAlert  # noqa: F401 — 兼容保留
 from engine.executor import ChainExecutor
+
+# 统一模型（新代码使用）
+from models.ingest import EventLog as _EventLog
+from models.ingest import TxLogsGroup as _UnifiedTxGroup
+from models.ingest import AlertData as _AlertData
 
 logger = logging.getLogger(__name__)
 
@@ -223,68 +228,50 @@ class _ChainManager:
 _chain_manager = _ChainManager()
 
 
-def _build_alert_data(group) -> dict:
+def _build_alert_data(group: TxLogsGroup, *, chain_name: str = "") -> dict:
     """
-    将 TxLogsGroup 转换为 alert_data 字典格式，
-    供 ChainExecutor 和节点系统消费。
+    将 TxLogsGroup 转换为 alert_data 字典格式。
 
-    格式与现有知识库样本兼容，额外包含原始 logs 数据。
+    现在委托给统一模型 AlertData.from_tx_group()，
+    保证实时处理与回测/测试使用完全一致的数据格式。
+
+    Args:
+        group: 兼容层 TxLogsGroup (dataclass)
+        chain_name: 链名称（从请求体传入，补充到 alert_data 中）
     """
-    logs_data = []
-    for log in group.logs:
-        logs_data.append({
-            "address": log.address,
-            "topics": log.topics,
-            "data": log.data,
-            "blockNumber": log.block_number,
-            "transactionHash": log.transaction_hash,
-            "logIndex": log.log_index,
-            "transactionIndex": log.transaction_index,
-            "blockHash": log.block_hash,
-            "removed": log.removed,
-        })
+    # 将兼容层 IngestedLog 列表转换为统一 EventLog 列表
+    unified_logs = [
+        _EventLog(
+            address=log.address,
+            topics=log.topics,
+            data=log.data,
+            block_number=log.block_number,
+            transaction_hash=log.transaction_hash,
+            log_index=log.log_index,
+            transaction_index=log.transaction_index,
+            block_hash=log.block_hash,
+            removed=log.removed,
+        )
+        for log in group.logs
+    ]
 
-    unique_addrs = list(group.unique_addresses)
-    unique_topics = list(group.unique_topics)
+    # 构建统一的 TxLogsGroup (Pydantic)
+    unified_group = _UnifiedTxGroup.from_event_logs(
+        event_logs=unified_logs,
+        tx_hash=group.tx_hash,
+        chain_id=group.chain_id,
+        chain_name=chain_name or "",
+        block_number=group.block_number,
+    )
 
-    # 尝试提取 Transfer 事件中的金额信息（用于大额转账等场景）
-    transfer_events = []
-    TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-    for log in group.logs:
-        if log.topics and log.topics[0].lower() == TRANSFER_TOPIC:
-            try:
-                value_raw = int(log.data, 16) if len(log.data) > 2 else 0
-            except (ValueError, OverflowError):
-                value_raw = 0
-            transfer_events.append({
-                "token_address": log.address,
-                "from_address": log.topics[1][26:] if len(log.topics) > 1 else "",
-                "to_address": log.topics[2][26:] if len(log.topics) > 2 else "",
-                "value_raw": value_raw,
-            })
-
-    return {
-        # 基础标识
-        "tx_hash": group.tx_hash,
-        "chain_id": group.chain_id,
-        "block_number": group.block_number,
-        # 日志数据
-        "logs": logs_data,
-        "log_count": group.log_count,
-        # 聚合特征
-        "unique_contracts": unique_addrs,
-        "unique_contract_count": len(unique_addrs),
-        "unique_topics": unique_topics,
-        "unique_topic_count": len(unique_topics),
-        # Transfer 事件摘要
-        "transfer_events": transfer_events,
-        "transfer_event_count": len(transfer_events),
-        # 时间戳
-        "received_at": time.strftime("%Y-%m-%dT%H:%M:%S") + "Z",
-    }
+    # 通过统一 builder 生成 alert_data，返回 .model_dump() 保持裸字典接口不变
+    return _AlertData.from_tx_group(unified_group).model_dump()
 
 
-async def _evaluate_group_with_chains(group) -> Optional[MatchedAlert]:
+async def _evaluate_group_with_chains(
+    group: TxLogsGroup,
+    chain_name: str = "",
+) -> Optional[MatchedAlert]:
     """
     用所有启用的规则链评估一个 TxLogsGroup。
 
@@ -298,7 +285,7 @@ async def _evaluate_group_with_chains(group) -> Optional[MatchedAlert]:
     if not chains:
         return None
 
-    alert_data = _build_alert_data(group)
+    alert_data = _build_alert_data(group, chain_name=chain_name)
 
     best_score = 0.0
     best_severity = "UNKNOWN"
@@ -425,7 +412,7 @@ async def ingest_logs(req: IngestLogsRequest):
 
         async def eval_one(group):
             async with semaphore:
-                return await _evaluate_group_with_chains(group)
+                return await _evaluate_group_with_chains(group, chain_name=req.chain_name)
 
         results = await asyncio.gather(*(*[eval_one(g) for g in groups],), return_exceptions=True)
         for result in results:
@@ -492,7 +479,7 @@ async def ingest_replay_logs(req: ReplayLogsRequest):
     alerts: list[MatchedAlert] = []
 
     for g in groups:
-        alert = await _evaluate_group_with_chains(g)
+        alert = await _evaluate_group_with_chains(g, chain_name="")
         if alert:
             alerts.append(alert)
 

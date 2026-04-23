@@ -1,5 +1,5 @@
 <template>
-  <div class="bp">
+  <div class="bp" :class="{ 'bp-critical-active': hasCritical }">
     <h3 class="bp-title">
       <span class="bp-icon">&#9888;</span> Behavior Detection
     </h3>
@@ -83,6 +83,7 @@ const store = useTraceStore()
 // 支持独立加载模式：优先使用 props，回退到 store
 const effectiveLoading = computed(() => props.isLoading || store.isBehaviorLoading)
 const behaviors = computed(() => store.behaviors)
+const hasCritical = computed(() => behaviors.value.some((b) => b.riskLevel === 'critical'))
 const hasError = computed(() => !!store.behaviorError)
 const sigCount = ref(null)
 
@@ -117,6 +118,23 @@ function formatDetails(d) {
 
 <style scoped>
 .bp { display: flex; flex-direction: column; gap: 8px; }
+
+/* 全局 CRITICAL 激活时面板顶部闪烁红色 */
+.bp-critical-active .bp-title {
+  animation: titleDanger 1s ease-in-out infinite;
+  color: #f85149;
+}
+.bp-critical-active .bp-icon {
+  animation: titleIconPulse 1s ease-in-out infinite;
+}
+@keyframes titleDanger {
+  0%, 100% { color: #f85149; }
+  50% { color: #ffa198; }
+}
+@keyframes titleIconPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 /* Title */
 .bp-title {
@@ -154,7 +172,20 @@ function formatDetails(d) {
   transition: border-color .15s, box-shadow .15s;
 }
 .bp-card:hover { border-color: #30363d; }
-.bp-card.risk-critical { border-left: 3px solid #f85149; }
+.bp-card.risk-critical {
+  border-left: 3px solid #f85149;
+  animation: bpCriticalPulse 1.2s ease-in-out infinite;
+}
+@keyframes bpCriticalPulse {
+  0%, 100% {
+    background: rgba(60, 0, 0, 0.4);
+    box-shadow: 0 0 8px rgba(200, 0, 0, 0.3);
+  }
+  50% {
+    background: rgba(150, 0, 0, 0.65);
+    box-shadow: 0 0 20px rgba(220, 20, 20, 0.6), 0 0 40px rgba(180, 0, 0, 0.3);
+  }
+}
 .bp-card.risk-high { border-left: 3px solid #ff7b72; }
 .bp-card.risk-medium { border-left: 3px solid #d29922; }
 .bp-card.risk-low { border-left: 3px solid #3fb950; }

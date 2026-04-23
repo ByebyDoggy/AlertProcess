@@ -130,6 +130,49 @@ async def cleanup_token_price_cache():
     except Exception as e:
         print(f"[shutdown] TokenPriceCache cleanup error: {e}")
 
+
+# ──────────────── 启动时自动拉取 apipool 数据 ────────────────
+
+@app.on_event("startup")
+async def auto_load_apipool_data():
+    """应用启动时，如果已配置 apipool-server 则自动拉取 RPC Pool 和 Moralis Key 数据"""
+    from config import settings
+
+    server_url = settings.apipool_server_url or ""
+    username = settings.apipool_username or ""
+    password = settings.apipool_password or ""
+
+    if not (server_url and username and password):
+        print("[startup][apipool] Skipped: server connection not configured (set APIPOOL_SERVER_URL / USERNAME / PASSWORD)")
+        return
+
+    # 1. 初始化 RPC Pool 客户端并重载配置
+    try:
+        from detectors.trace.provider import get_rpc_client
+
+        client = get_rpc_client()
+        await client.reload_config()
+        pools = await client.get_pool_status()
+        healthy = sum(1 for p in pools if p.get("healthyNodes", 0) > 0)
+        print(f"[startup][apipool] RPC pools loaded: {len(pools)} chains ({healthy} healthy)")
+    except Exception as e:
+        print(f"[startup][apipool] Failed to reload RPC pools (non-fatal): {e}")
+
+    # 2. 如果配置了 moralis_pool_identifier，自动加载 Moralis Key 池
+    pool_id = getattr(settings, "moralis_pool_identifier", None) or ""
+    if not pool_id:
+        return
+
+    try:
+        from nodes.context.providers.moralis_key_pool import reload_moralis_key_pool
+
+        result = await reload_moralis_key_pool()
+        key_count = result.get("key_count", 0)
+        ready = "ready" if result.get("is_ready") else f"not ready"
+        print(f"[startup][apipool] Moralis key pool loaded: {key_count} keys, status={ready}")
+    except Exception as e:
+        print(f"[startup][apipool] Failed to reload moralis pool (non-fatal): {e}")
+
 # 静态前端文件服务 (仅当 dist 目录存在时)
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 if os.path.isdir(frontend_dist):

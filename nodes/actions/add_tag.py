@@ -1,11 +1,11 @@
-"""添加标签动作 — 在执行上下文中添加标签"""
-
 from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field, field_validator
+
 from nodes.base import NodeRegistry
-from nodes.actions.base import BaseAction
+from nodes.actions.base import BaseAction, ActionInputMixin, ActionOutputMixin
 
 
 class AddTagAction(BaseAction):
@@ -19,43 +19,24 @@ class AddTagAction(BaseAction):
 
     name: str = "add_tag_action"
     label: str = "添加标签"
-    description: str = "向告警添加自定义标签"
+    description: str = "向告警执行上下文中添加自定义标签（如 phishing、flash_loan），支持去重合并。标签会传递给下游动作节点用于通知或持久化"
     icon: str = "\U0001f3f7"
     color: str = "#22c55e"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "default": [],
-                    "description": "要添加的标签列表",
-                },
-                "deduplicate": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "是否去重",
-                },
-            },
-        }
+    # ── Pydantic 配置模型 ──
+    class ConfigModel(BaseModel):
+        tags: list[str] = Field(default=[], description="要添加的标签列表")
+        deduplicate: bool = Field(default=True, description="是否去重")
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {"tags": [], "deduplicate": True}
+        @field_validator("tags")
+        @classmethod
+        def _valid_tags(cls, v):
+            if not isinstance(v, list) or any(not isinstance(t, str) for t in v):
+                raise ValueError("tags must be a list of strings")
+            return v
 
-    def validate_config(self, config: dict[str, Any]) -> list[str]:
-        errors = []
-        tags = config.get("tags", [])
-        if not isinstance(tags, list):
-            errors.append("tags must be a list of strings")
-        elif any(not isinstance(t, str) for t in tags):
-            errors.append("tags must contain only strings")
-        return errors
-
-    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def process(self, input: ActionInputMixin) -> ActionOutputMixin:
+        context = input.context
         tags = self.config.get("tags", [])
         dedup = self.config.get("deduplicate", True)
 
@@ -68,12 +49,15 @@ class AddTagAction(BaseAction):
 
         context["final_labels"] = combined
 
-        return {
-            "action": "add_tag",
-            "tags_added": tags,
-            "total_tags": len(combined),
-            "deduplicated": dedup,
-        }
+        return ActionOutputMixin(
+            score=input.upstream_score, passed=input.upstream_passed, severity="UNKNOWN", labels=combined,
+            action_result={
+                "action": "add_tag",
+                "tags_added": tags,
+                "total_tags": len(combined),
+                "deduplicated": dedup,
+            },
+        )
 
 
 NodeRegistry.register(AddTagAction)

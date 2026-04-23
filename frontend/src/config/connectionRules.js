@@ -6,10 +6,15 @@
  */
 export const ALLOWED_TYPE_MAPPING = {
   context: ['context', 'any'],
+  // detection_output: 检测器输出（可兼作评分）
   detection_output: ['detection_output', 'score_output', 'any'],
-  comparison_output: ['comparison_output', 'any'],
+  // score_output: 评分输出（仅评分/脚本节点产生）
   score_output: ['detection_output', 'score_output', 'any'],
-  logic_output: ['logic_output', 'comparison_output', 'any'],
+  // logic_output: 逻辑/脚本布尔输出
+  logic_output: ['logic_output', 'any'],
+  memory_output: ['memory_output', 'context', 'any'],
+  // script_output: Python 表达式节点输出（最通用，兼容所有类型）
+  script_output: ['script_output', 'detection_output', 'score_output', 'logic_output', 'any'],
 }
 
 /**
@@ -17,11 +22,12 @@ export const ALLOWED_TYPE_MAPPING = {
  */
 export const CATEGORY_ALLOWED_INPUTS = {
   input: [],
+  provider: ['context', 'any'],
   detection: ['context', 'any'],
-  comparison: ['detection_output', 'score_output'],
-  scoring: ['detection_output', 'score_output'],
-  logic: ['comparison_output', 'logic_output'],
+  logic: ['logic_output', 'context', 'memory_output', 'any'],
   action: ['any'],
+  memory: ['detection_output', 'score_output', 'context', 'any'],
+  scripting: ['detection_output', 'score_output', 'context', 'any'],
 }
 
 /**
@@ -30,9 +36,10 @@ export const CATEGORY_ALLOWED_INPUTS = {
 export const DATA_TYPE_COLORS = {
   context: '#22c55e',
   detection_output: '#f59e0b',
-  comparison_output: '#06b6d4',
   score_output: '#f97316',
   logic_output: '#ef4444',
+  memory_output: '#8b5cf6',
+  script_output: '#22c55e',
   any: '#6b7280',
 }
 

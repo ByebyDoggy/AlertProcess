@@ -1,22 +1,33 @@
-"""ARKM 实体标签检测器 — 通过 @require("arkm_label") 自动获取上下文"""
+"""ARKM 实体标签检测器
+
+通过 ARKM Intelligence 检测恶意实体标签。标签数据通过 ARKMLabelProviderNode 节点预先填充。
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from nodes.base import NodeRegistry
-from nodes.context.require import require
-from nodes.detectors.base import BaseDetector
+from pydantic import Field
+
+from nodes.base import NodeRegistry, score_to_severity
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
 
 
-@require("arkm_label")
+class ARKMLabelOutput(DetectorOutputMixin):
+    """ARKM 标签检测器输出"""
+    pass
+
+
 class ARKMLabelDetector(BaseDetector):
     """
     ARKM 实体标签检测器 — 通过 ARKM Intelligence 检测恶意实体标签。
 
-    上下文需求:
-      @require("arkm_label")
-      → 执行前自动注入: entity_type, entity_id, entity_name, entity_confidence
+    标签数据通过 ARKMLabelProviderNode 节点预先填充到 tx_context.extra:
+      - entity_type: 实体类型 (hacker, exchange, etc.)
+      - entity_id: 实体 ID
+      - entity_name: 实体名称
+      - entity_confidence: 置信度
 
     评分:
     - 黑名单实体类型 (hacker) → 95
@@ -26,49 +37,33 @@ class ARKMLabelDetector(BaseDetector):
 
     name: str = "arkm_label_detector"
     label: str = "ARKM 标签检测"
-    description: str = "通过 ARKM Intelligence 检测恶意实体标签（需 ARKM API 上下文）"
+    description: str = "通过 ARKM Intelligence 实体标签库检测恶意实体：黑名单类型（如 hacker）直接给 95 分，已知实体 20 分。需连接 ARKMLabelProviderNode 节点"
     icon: str = "\U0001f50d"
     color: str = "#7c3aed"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {"type": "number", "minimum": 0, "maximum": 100, "default": 50},
-                "blacklist_entity_types": {"type": "array", "items": {"type": "string"},
-                                             "default": ["hacker"]},
-                "ignored_entity_types": {"type": "array", "items": {"type": "string"}, "default": []},
-            },
-        }
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        blacklist_entity_types: list[str] = Field(default=["hacker"], description="黑名单实体类型列表")
+        ignored_entity_types: list[str] = Field(default=[], description="忽略的实体类型列表")
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 50,
-            "blacklist_entity_types": ["hacker"],
-            "ignored_entity_types": [],
-        }
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = ARKMLabelOutput
 
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
-        address = context.get("exploiter_address") or context.get("from_address", "")
+    async def process(self, tx_context: TransactionContext) -> ARKMLabelOutput:
+        address = tx_context.extra.get("exploiter_address") or tx_context.from_address or ""
         if not address:
-            return 0.0, {"error": "no address available"}
+            return ARKMLabelOutput(score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                                   detection={"error": "no address available"})
 
-        # @require("arkm_label") 已自动注入以下字段:
-        # - entity_type: 实体类型 (hacker, exchange, etc.)
-        # - entity_id, entity_name, entity_confidence
-        entity_type = context.get("entity_type")
-        entity_id = context.get("entity_id")
-        entity_name = context.get("entity_name")
-        entity_confidence = context.get("entity_confidence")
+        # 从 tx_context.extra 获取 ARKMLabelProviderNode 预先填充的数据
+        entity_type = tx_context.extra.get("entity_type")
+        entity_id = tx_context.extra.get("entity_id")
+        entity_name = tx_context.extra.get("entity_name")
+        entity_confidence = tx_context.extra.get("entity_confidence")
 
         if not entity_type:
-            # ARKM API 未配置或调用失败
-            return 0.0, {
-                "address": address,
-                "reason": "no entity data (ARKM API not configured or unavailable)",
-            }
+            return ARKMLabelOutput(score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                                   detection={"address": address, "reason": "no entity data (ARKMLabelProviderNode not connected or unavailable)"})
 
         blacklist = self.config.get("blacklist_entity_types", ["hacker"])
         ignored = self.config.get("ignored_entity_types", [])
@@ -85,16 +80,21 @@ class ARKMLabelDetector(BaseDetector):
             issues = []
 
         labels = issues if score >= self.config.get("threshold", 50) else []
-        return score, {
-            "address": address,
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "entity_name": entity_name,
-            "entity_confidence": entity_confidence,
-            "is_blacklisted": entity_type in blacklist,
-            "detected_issues": issues,
-            "labels": labels,
-        }
+        threshold = self.config.get("threshold", 50.0)
+        return ARKMLabelOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels,
+            detection={
+                "address": address,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "entity_name": entity_name,
+                "entity_confidence": entity_confidence,
+                "is_blacklisted": entity_type in blacklist,
+                "detected_issues": issues,
+                "labels": labels,
+            },
+        )
 
 
 NodeRegistry.register(ARKMLabelDetector)

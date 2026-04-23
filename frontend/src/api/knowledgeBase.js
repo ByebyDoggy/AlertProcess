@@ -59,6 +59,26 @@ export async function getCategories() {
 }
 
 /**
+ * 链上数据自动获取 — 根据 chain_id + tx_hash 拉取交易数据
+ */
+export async function fetchTxData(chainId, txHash) {
+  return apiService.request('/knowledge-base/fetch-tx', {
+    method: 'POST',
+    body: JSON.stringify({ chain_id: chainId, tx_hash: txHash }),
+  })
+}
+
+/**
+ * 快速创建样本 — 仅需 chain_id + tx_hash，后端自动获取链上数据
+ */
+export async function quickCreateSample({ chain_id, tx_hash, category, tags, description, expected_severity, expected_labels, expected_min_score }) {
+  return apiService.request('/knowledge-base/quick-create', {
+    method: 'POST',
+    body: JSON.stringify({ chain_id, tx_hash, category, tags, description, expected_severity, expected_labels, expected_min_score }),
+  })
+}
+
+/**
  * 测试运行 (挂在规则链 API 上)
  */
 export async function testRunChain(chainId, body) {

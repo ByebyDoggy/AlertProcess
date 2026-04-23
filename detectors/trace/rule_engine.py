@@ -1,10 +1,17 @@
 """
-Ingest 数据模型
-================
-从 EVMLogListener 接收的原始 Event Logs 的数据结构定义。
+Ingest 数据模型（兼容层）
+========================
 
-规则检测逻辑已迁移至 engine/ + nodes/ 架构（前端可视化配置的 DAG 规则链）。
-本模块仅保留数据传输对象（DTO），供 ingest_router 和测试使用。
+⚠️ 已迁移至统一模型: models.ingest
+
+本模块保留 dataclass 定义作为**向后兼容层**，
+所有新代码应使用:
+  - models.ingest.EventLog       (替代 IngestedLog)
+  - models.ingest.TxLogsGroup    (替代 TxLogsGroup)
+  - models.ingest.AlertData      (替代 _build_alert_data)
+  - models.ingest.TransferEvent  (新增)
+
+迁移完成后可移除此文件。
 """
 
 from __future__ import annotations
@@ -27,14 +34,14 @@ class Severity(str, Enum):
 @dataclass
 class IngestedLog:
     """
-    从 EVMLogListener 接收的单条 Event Log
+    [兼容] 从 EVMLogListener 接收的单条 Event Log
 
-    字段与 EVMLISTENER_INPUT_SPEC.md 中 LogObject 一致，
-    所有数值字段均为 integer 类型。
+    新代码请使用 models.ingest.EventLog。
+    此 dataclass 保留用于 ingest_router 等尚未迁移的调用方。
     """
-    address: str = ""              # 合约地址
+    address: str = ""
     topics: list[str] = field(default_factory=list)
-    data: str = "0x"               # hex string
+    data: str = "0x"
     block_number: int = 0
     transaction_hash: str = ""
     log_index: int = 0
@@ -59,7 +66,12 @@ class IngestedLog:
 
 @dataclass
 class TxLogsGroup:
-    """按 tx_hash 分组后的日志集合"""
+    """
+    [兼容] 按 tx_hash 分组后的日志集合
+
+    新代码请使用 models.ingest.TxLogsGroup (Pydantic)。
+    此 dataclass 保留用于 ingest_router 等尚未迁移的调用方。
+    """
     tx_hash: str
     chain_id: int
     logs: list[IngestedLog]
@@ -89,10 +101,9 @@ class MatchedAlert:
     tx_hash: str
     chain_id: int
     block_number: int
-    results: list[dict[str, Any]] = field(default_factory=list)  # 节点执行结果
+    results: list[dict[str, Any]] = field(default_factory=list)
     trigger_log_count: int = 0
     detected_at: float = 0.0
-    # 从 ExecutionContext 聚合的结果
     final_score: float = 0.0
     final_severity: str = "UNKNOWN"
     labels: list[str] = field(default_factory=list)
@@ -107,7 +118,6 @@ class MatchedAlert:
                 "confidence": 0.0,
                 "details": {},
             }
-        # 返回分数最高的节点结果
         best = max(self.results, key=lambda r: r.get("score", 0))
         return {
             "alert_type": best.get("node_type", ""),

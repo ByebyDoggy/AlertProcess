@@ -11,7 +11,7 @@ from detectors.trace.token_price_cache import (
     TokenMeta,
     TokenPriceCache,
     NATIVE_TOKEN_DEFAULTS,
-    PRICE_TTL_SECONDS,
+    FULL_REFRESH_INTERVAL,
 )
 
 
@@ -30,7 +30,8 @@ class TestTokenMeta:
         assert meta.price_usd is None
         assert meta.price_24h_change is None
         assert meta.logo_url is None
-        assert meta.fetched_at == 0.0
+        # v2: fetched_at 默认为 time.time()，不再是 0.0
+        assert meta.fetched_at > 0
 
     def test_is_price_fresh_no_price(self):
         meta = TokenMeta()
@@ -40,12 +41,14 @@ class TestTokenMeta:
         meta = TokenMeta(price_usd=3500.0, fetched_at=time.time())
         assert meta.is_price_fresh is True
 
-    def test_is_price_fresh_expired(self):
+    def test_is_price_fresh_stale(self):
+        """v2 中只要 price_usd 非 None 且 fetched_at > 0 即为 fresh"""
         meta = TokenMeta(
             price_usd=3500.0,
-            fetched_at=time.time() - PRICE_TTL_SECONDS - 10,
+            fetched_at=time.time() - FULL_REFRESH_INTERVAL - 10,
         )
-        assert meta.is_price_fresh is False
+        # v2: is_price_fresh 不再基于 TTL 过期，只要 price_usd 非 None 且 fetched_at > 0
+        assert meta.is_price_fresh is True
 
     def test_is_price_fresh_zero_fetched_at(self):
         meta = TokenMeta(price_usd=3500.0, fetched_at=0)
@@ -67,11 +70,11 @@ class TestTokenPriceCacheBasic:
 
     def test_make_key(self):
         key = TokenPriceCache._make_key(1, "0xabc123")
-        assert key == "1:0xabc123"
+        assert key == "ethereum:0xabc123"
 
     def test_make_key_native(self):
         key = TokenPriceCache._make_key(1, "")
-        assert key == "1:"
+        assert key == "ethereum:"
 
     def test_get_empty_cache(self):
         cache = self._make_cache()
@@ -86,39 +89,40 @@ class TestTokenPriceCacheBasic:
     def test_get_price_fresh(self):
         cache = self._make_cache()
         meta = TokenMeta(price_usd=3500.0, fetched_at=time.time())
-        cache._cache["1:0xabc"] = meta
+        cache._cache["ethereum:0xabc"] = meta
         result = cache.get_price(1, "0xABC")  # 大小写不敏感
         assert result == 3500.0
 
     def test_get_price_stale(self):
+        """v2 中只要 price_usd 非 None 且 fetched_at > 0 即返回价格"""
         cache = self._make_cache()
         meta = TokenMeta(
             price_usd=3500.0,
-            fetched_at=time.time() - PRICE_TTL_SECONDS - 10,
+            fetched_at=time.time() - FULL_REFRESH_INTERVAL - 10,
         )
-        cache._cache["1:0xabc"] = meta
+        cache._cache["ethereum:0xabc"] = meta
         result = cache.get_price(1, "0xabc")
-        assert result is None
+        # v2: 不再基于 TTL 过期，价格仍有效
+        assert result == 3500.0
 
     def test_clear(self):
         cache = self._make_cache()
-        cache._cache["1:0xabc"] = TokenMeta()
+        cache._cache["ethereum:0xabc"] = TokenMeta()
         cache.clear()
         assert len(cache._cache) == 0
 
     def test_stats(self):
         cache = self._make_cache()
-        cache._cache["1:0xabc"] = TokenMeta(
+        cache._cache["ethereum:0xabc"] = TokenMeta(
             price_usd=100.0, fetched_at=time.time()
         )
-        cache._cache["1:0xdef"] = TokenMeta(
+        cache._cache["ethereum:0xdef"] = TokenMeta(
             price_usd=200.0,
-            fetched_at=time.time() - PRICE_TTL_SECONDS - 10,
+            fetched_at=time.time() - FULL_REFRESH_INTERVAL - 10,
         )
         stats = cache.stats()
         assert stats["total_entries"] == 2
-        assert stats["fresh_price"] == 1
-        assert stats["stale_price"] == 1
+        # v2: 两者都有 price_usd，所以 with_price_data == 2
         assert stats["with_price_data"] == 2
 
 
@@ -172,7 +176,7 @@ class TestTokenPriceCacheFallback:
         meta = TokenMeta(
             symbol="USDT", decimals=6, price_usd=1.0, fetched_at=time.time()
         )
-        cache._cache["1:0xdac17f958d2ee523a2206206994597c13d831ec7"] = meta
+        cache._cache["ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"] = meta
 
         result = await cache.batch_fetch(
             chain_id=1,
@@ -236,26 +240,18 @@ class TestTokenPriceCacheRemote:
 
     @pytest.mark.asyncio
     async def test_batch_fetch_with_mock(self, mock_response):
-        """测试通过 mock client 的 batch_fetch"""
-        # 创建 mock AsyncClient
-        mock_client = httpx.AsyncClient()
+        """测试通过 _do_full_refresh 填充缓存后的 batch_fetch"""
+        cache = TokenPriceCache(market_db_url="http://localhost:99999")
 
-        # 拦截 post 请求
-        original_post = mock_client.post
-
-        async def mock_post(url, **kwargs):
-            resp = httpx.Response(
-                status_code=200,
-                json=mock_response,
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
-        cache = TokenPriceCache(
-            market_db_url="http://localhost:8002",
-            client=mock_client,
+        # v2: 直接手动填充缓存模拟 _do_full_refresh 结果
+        now = time.time()
+        cache._cache["ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"] = TokenMeta(
+            symbol="USDT", name="Tether USD", decimals=6, price_usd=1.0,
+            price_24h_change=0.01, logo_url="https://example.com/usdt.png", fetched_at=now,
+        )
+        cache._cache["ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"] = TokenMeta(
+            symbol="WETH", name="Wrapped Ether", decimals=18, price_usd=3499.50,
+            price_24h_change=2.35, logo_url="https://example.com/weth.png", fetched_at=now,
         )
 
         result = await cache.batch_fetch(
@@ -284,83 +280,47 @@ class TestTokenPriceCacheRemote:
         assert weth.price_usd == 3499.50
 
         native = result[""]
+        # v2: native 通过 WETH proxy 获取价格
         assert native.symbol == "ETH"
-        assert native.price_usd == 3500.0
-        assert native.logo_url == "https://example.com/eth.png"
-
-        await mock_client.aclose()
+        assert native.price_usd == 3499.50
 
     @pytest.mark.asyncio
     async def test_batch_fetch_caches_results(self, mock_response):
-        """测试 batch_fetch 结果被缓存"""
-        mock_client = httpx.AsyncClient()
-        call_count = 0
+        """v2: batch_fetch 是纯内存读取，不触发远程调用"""
+        cache = TokenPriceCache(market_db_url="http://localhost:99999")
 
-        async def mock_post(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            resp = httpx.Response(
-                status_code=200,
-                json=mock_response,
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
-        cache = TokenPriceCache(
-            market_db_url="http://localhost:8002",
-            client=mock_client,
+        now = time.time()
+        cache._cache["ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"] = TokenMeta(
+            symbol="USDT", decimals=6, price_usd=1.0, fetched_at=now,
         )
 
-        # 第一次调用
-        await cache.batch_fetch(
+        # v2: 多次 batch_fetch 不触发远程调用
+        result1 = await cache.batch_fetch(
             chain_id=1,
             addresses=["0xdac17f958d2ee523a2206206994597c13d831ec7"],
             include_native=True,
         )
-        assert call_count == 1
-
-        # 第二次调用 — 缓存命中（价格仍在 TTL 内）
-        await cache.batch_fetch(
+        result2 = await cache.batch_fetch(
             chain_id=1,
             addresses=["0xdac17f958d2ee523a2206206994597c13d831ec7"],
             include_native=True,
         )
-        assert call_count == 1  # 没有增加，缓存命中
-
-        await mock_client.aclose()
+        # 两次结果应一致（纯内存读取）
+        assert result1["0xdac17f958d2ee523a2206206994597c13d831ec7"].price_usd == 1.0
+        assert result2["0xdac17f958d2ee523a2206206994597c13d831ec7"].price_usd == 1.0
 
     @pytest.mark.asyncio
-    async def test_batch_fetch_partial_cache(self, mock_response):
+    async def test_batch_fetch_partial_cache(self):
         """测试部分缓存命中时的行为"""
-        mock_client = httpx.AsyncClient()
-        call_count = 0
+        cache = TokenPriceCache(market_db_url="http://localhost:99999")
 
-        async def mock_post(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            resp = httpx.Response(
-                status_code=200,
-                json=mock_response,
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
-        cache = TokenPriceCache(
-            market_db_url="http://localhost:8002",
-            client=mock_client,
-        )
-
-        # 先缓存 USDT
+        # 先手动缓存 USDT
         usdt_meta = TokenMeta(
             symbol="USDT", decimals=6, price_usd=1.0, fetched_at=time.time()
         )
-        cache._cache["1:0xdac17f958d2ee523a2206206994597c13d831ec7"] = usdt_meta
+        cache._cache["ethereum:0xdac17f958d2ee523a2206206994597c13d831ec7"] = usdt_meta
 
-        # 请求 USDT + WETH
+        # 请求 USDT + WETH（WETH 未缓存）
         result = await cache.batch_fetch(
             chain_id=1,
             addresses=[
@@ -370,34 +330,20 @@ class TestTokenPriceCacheRemote:
             include_native=True,
         )
 
-        # 远程调用应该只查未缓存的 WETH
-        assert call_count == 1
-
         # 两个都应该在结果中
         assert "0xdac17f958d2ee523a2206206994597c13d831ec7" in result
         assert "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2" in result
-
-        await mock_client.aclose()
+        # USDT 有价格，WETH 返回空 TokenMeta
+        assert result["0xdac17f958d2ee523a2206206994597c13d831ec7"].price_usd == 1.0
+        assert result["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"].price_usd is None
 
     @pytest.mark.asyncio
     async def test_batch_fetch_remote_failure_fallback(self):
-        """测试远程调用失败时的 fallback"""
-        mock_client = httpx.AsyncClient()
-
-        async def mock_post(url, **kwargs):
-            resp = httpx.Response(
-                status_code=500,
-                json={"detail": "Internal error"},
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
+        """v2: 远程不可用时 batch_fetch 使用 fallback"""
         cache = TokenPriceCache(
             market_db_url="http://localhost:8002",
-            client=mock_client,
         )
+        cache.enabled = False  # 禁用，走 fallback
 
         result = await cache.batch_fetch(
             chain_id=1,
@@ -410,8 +356,6 @@ class TestTokenPriceCacheRemote:
         assert result[""].symbol == "ETH"
         # 未知地址价格应为 None
         assert "0xdac17f958d2ee523a2206206994597c13d831ec7" in result
-
-        await mock_client.aclose()
 
 
 # ================================================================
@@ -542,46 +486,14 @@ class TestWETHFallback:
 
     @pytest.mark.asyncio
     async def test_weth_fallback_when_no_native(self):
-        """当 __native__ 缺失但 WETH 在结果中时，用 WETH 价格作为原生代币价格"""
-        # 模拟 MarketDataBase 返回（不含 __native__，但含 WETH）
-        mock_response_no_native = {
-            "success": True,
-            "data": {
-                "tokens": {
-                    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {
-                        "symbol": "WETH",
-                        "name": "Wrapped Ether",
-                        "decimals": 18,
-                        "price_usd": 2246.42,
-                        "price_usd_24h_change": -1.5,
-                        "logo_url": "https://example.com/weth.png",
-                    },
-                },
-            },
-            "metadata": {
-                "total_requested": 1,
-                "found": 1,
-                "not_found": [],
-                "data_timestamp": "2026-04-11T12:00:00Z",
-                "source": "coingecko",
-            },
-        }
+        """当缓存中无 __native__ 条目但有 WETH 时，用 WETH 价格作为原生代币价格"""
+        cache = TokenPriceCache(market_db_url="http://localhost:99999")
 
-        mock_client = httpx.AsyncClient()
-
-        async def mock_post(url, **kwargs):
-            resp = httpx.Response(
-                status_code=200,
-                json=mock_response_no_native,
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
-        cache = TokenPriceCache(
-            market_db_url="http://localhost:8002",
-            client=mock_client,
+        # 手动在缓存中放入 WETH
+        cache._cache["ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"] = TokenMeta(
+            symbol="WETH", name="Wrapped Ether", decimals=18,
+            price_usd=2246.42, price_24h_change=-1.5,
+            logo_url="https://example.com/weth.png", fetched_at=time.time(),
         )
 
         result = await cache.batch_fetch(
@@ -598,55 +510,18 @@ class TestWETHFallback:
         assert native.logo_url == "https://example.com/weth.png"
         assert native.decimals == 18
 
-        await mock_client.aclose()
-
     @pytest.mark.asyncio
     async def test_weth_fallback_adds_weth_to_request(self):
-        """测试 include_native=True 时自动将 WETH 地址加入请求"""
-        captured_payload = {}
+        """v2: batch_fetch 不再发送远程请求，而是从内存读取"""
+        cache = TokenPriceCache(market_db_url="http://localhost:99999")
 
-        mock_response_no_native = {
-            "success": True,
-            "data": {
-                "tokens": {
-                    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": {
-                        "symbol": "WETH",
-                        "name": "Wrapped Ether",
-                        "decimals": 18,
-                        "price_usd": 2246.42,
-                    },
-                },
-            },
-            "metadata": {"total_requested": 1, "found": 1, "not_found": [], "data_timestamp": "2026-04-11T12:00:00Z", "source": "coingecko"},
-        }
-
-        mock_client = httpx.AsyncClient()
-
-        async def mock_post(url, **kwargs):
-            captured_payload.update(kwargs.get("json", {}))
-            resp = httpx.Response(
-                status_code=200,
-                json=mock_response_no_native,
-                request=httpx.Request("POST", url),
-            )
-            return resp
-
-        mock_client.post = mock_post
-
-        cache = TokenPriceCache(
-            market_db_url="http://localhost:8002",
-            client=mock_client,
-        )
-
-        await cache.batch_fetch(
+        # 没有缓存数据，batch_fetch 应返回空 TokenMeta
+        result = await cache.batch_fetch(
             chain_id=1,
             addresses=["0xdac17f958d2ee523a2206206994597c13d831ec7"],
             include_native=True,
         )
 
-        # 验证 WETH 地址被自动添加到请求中
-        addrs = captured_payload.get("contract_addresses", [])
-        weth = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
-        assert any(a.lower() == weth for a in addrs), f"WETH address not in request: {addrs}"
-
-        await mock_client.aclose()
+        # native 应使用默认值
+        assert "" in result
+        assert result[""].symbol == "ETH"

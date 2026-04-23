@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { generateId, deepClone } from '../utils/helpers.js'
 import * as chainApi from '../api/ruleChain.js'
 import { useNodeTypesStore } from './nodeTypes.js'
+import { useTabStore } from './tabStore.js'
 
 export const useChainDataStore = defineStore('chainData', () => {
   const chains = ref([])
@@ -65,9 +66,66 @@ export const useChainDataStore = defineStore('chainData', () => {
     currentChainId.value = null
     chainName.value = ''
     chainDescription.value = ''
-    chainEnabled.value = true
+    chainEnabled.value = false
     nodes.value = []
     edges.value = []
+  }
+
+  // ─── 多标签页数据同步 ───
+  /**
+   * 将当前编辑数据保存到 tabStore 的活跃标签页快照中
+   * 在切换标签页或关闭标签页之前调用
+   */
+  function saveToTab() {
+    const tabStore = useTabStore()
+    const tab = tabStore.activeTab
+    if (!tab) return
+    tabStore.updateTabData(tab.id, {
+      name: chainName.value,
+      description: chainDescription.value,
+      enabled: chainEnabled.value,
+      nodes: deepClone(nodes.value),
+      edges: deepClone(edges.value),
+      nodeTestResults: deepClone(nodeTestResults.value),
+      nodeTestInputs: deepClone(nodeTestInputs.value),
+      isModified: isModified.value,
+      viewport: {
+        zoom: _editorZoomSnapshot,
+        panX: _editorPanXSnapshot,
+        panY: _editorPanYSnapshot,
+      },
+    })
+  }
+
+  /** 视口快照（由 RuleChainEditor 在切换前写入） */
+  let _editorZoomSnapshot = 1
+  let _editorPanXSnapshot = 0
+  let _editorPanYSnapshot = 0
+
+  function setViewportSnapshot(zoom, panX, panY) {
+    _editorZoomSnapshot = zoom
+    _editorPanXSnapshot = panX
+    _editorPanYSnapshot = panY
+  }
+
+  /**
+   * 从 tabStore 标签页快照恢复编辑数据到当前 store
+   * 在切换到新标签页之后调用
+   */
+  function restoreFromTab(tab) {
+    if (!tab) {
+      createNew()
+      return
+    }
+    currentChainId.value = tab.chainId
+    chainName.value = tab.name
+    chainDescription.value = tab.description || ''
+    chainEnabled.value = tab.enabled !== false
+    nodes.value = deepClone(tab.nodes || [])
+    edges.value = deepClone(tab.edges || [])
+    nodeTestResults.value = deepClone(tab.nodeTestResults || {})
+    nodeTestInputs.value = deepClone(tab.nodeTestInputs || {})
+    _dirty.value = false
   }
 
   // ─── Node operations ───
@@ -125,8 +183,56 @@ export const useChainDataStore = defineStore('chainData', () => {
     }
   }
 
+  /**
+   * 复制一组节点及其内部连线，返回新节点 ID 列表。
+   * @param {string[]} nodeIds - 要复制的节点 ID
+   * @param {number} offsetX - x 轴偏移
+   * @param {number} offsetY - y 轴偏移
+   * @returns {string[]} 新节点 ID 列表
+   */
+  function duplicateNodes(nodeIds, offsetX = 40, offsetY = 40) {
+    const idMap = {} // oldId → newId
+    const newNodes = []
+    const idSet = new Set(nodeIds)
+
+    // 1. 复制节点
+    for (const id of nodeIds) {
+      const src = nodes.value.find(n => n.id === id)
+      if (!src) continue
+      const newId = generateId('node')
+      idMap[id] = newId
+      newNodes.push({
+        ...deepClone(src),
+        id: newId,
+        position: {
+          x: src.position.x + offsetX,
+          y: src.position.y + offsetY,
+        },
+      })
+    }
+
+    // 2. 复制内部连线（两端都在选中集合中）
+    const newEdges = []
+    for (const e of edges.value) {
+      if (!idSet.has(e.source) || !idSet.has(e.target)) continue
+      newEdges.push({
+        ...deepClone(e),
+        id: generateId('edge'),
+        source: idMap[e.source],
+        target: idMap[e.target],
+      })
+    }
+
+    // 3. 写入 store
+    nodes.value = [...nodes.value, ...newNodes]
+    edges.value = [...edges.value, ...newEdges]
+    markDirty()
+
+    return Object.values(idMap)
+  }
+
   // ─── Edge operations ───
-  function addEdge(sourceId, sourcePort, targetId, targetPort) {
+  function addEdge(sourceId, sourcePort, targetId, targetPort, fieldMapping, inputTransformer) {
     // 去重检查：同一源到同一目标端口
     const exists = edges.value.some(e =>
       e.target === targetId && e.targetPort === targetPort
@@ -140,6 +246,8 @@ export const useChainDataStore = defineStore('chainData', () => {
       target: targetId,
       targetPort: targetPort || 'input_0',
       label: '',
+      fieldMapping: fieldMapping || null,
+      inputTransformer: inputTransformer || null,
     }
     edges.value.push(edge)
     markDirty()
@@ -155,6 +263,55 @@ export const useChainDataStore = defineStore('chainData', () => {
     const idx = edges.value.findIndex(e => e.id === edgeId)
     if (idx !== -1) edges.value[idx] = { ...edges.value[idx], ...updates }
     markDirty()
+  }
+
+  // ─── 节点测试结果（n8n 式逐节点调试） ───
+  const nodeTestResults = ref({})          // { [node_id]: { output, duration_ms, error, timestamp } }
+  const nodeTestInputs = ref({})            // { [node_id]: alert_data_json_string }  手动设置的输入数据
+
+  function setNodeTestResult(nodeId, result) {
+    nodeTestResults.value = { ...nodeTestResults.value, [nodeId]: { ...result, timestamp: Date.now() } }
+  }
+
+  function clearNodeTestResult(nodeId) {
+    const next = { ...nodeTestResults.value }
+    delete next[nodeId]
+    nodeTestResults.value = next
+  }
+
+  function clearAllTestResults() {
+    nodeTestResults.value = {}
+    nodeTestInputs.value = {}
+  }
+
+  function setNodeTestInput(nodeId, jsonData) {
+    nodeTestInputs.value = { ...nodeTestInputs.value, [nodeId]: jsonData }
+  }
+
+  function getNodeTestInput(nodeId) {
+    return nodeTestInputs.value[nodeId] || null
+  }
+
+  function hasUpstreamOutput(nodeId) {
+    /** 判断某节点的上游是否有缓存输出 */
+    for (const e of edges.value) {
+      if (e.target === nodeId && nodeTestResults.value[e.source]) return true
+    }
+    return false
+  }
+
+  function getUpstreamOutputs(nodeId) {
+    /** 收集目标节点所有上游的缓存输出 */
+    const result = {}
+    for (const e of edges.value) {
+      if (e.target === nodeId) {
+        const cached = nodeTestResults.value[e.source]
+        if (cached && cached.output) {
+          result[e.source] = cached.output
+        }
+      }
+    }
+    return result
   }
 
   // ─── Persistence ───
@@ -185,6 +342,24 @@ export const useChainDataStore = defineStore('chainData', () => {
     await fetchChains()
   }
 
+  /**
+   * 切换指定规则链的启用/禁用状态
+   * 仅更新后端和列表，不切换当前编辑的链
+   */
+  async function toggleChainEnabled(chainId, enabled) {
+    await chainApi.toggleChainEnabled(chainId, enabled)
+    // 更新本地列表中的状态
+    const idx = chains.value.findIndex(c => c.id === chainId)
+    if (idx !== -1) {
+      chains.value[idx] = { ...chains.value[idx], enabled }
+      chains.value = [...chains.value]
+    }
+    // 如果正在编辑该链，也同步当前编辑状态（但不触发脏标记）
+    if (currentChainId.value === chainId) {
+      chainEnabled.value = enabled
+    }
+  }
+
   function clearCanvas() {
     nodes.value = []
     edges.value = []
@@ -197,7 +372,15 @@ export const useChainDataStore = defineStore('chainData', () => {
     currentChain, isModified,
     fetchChains, loadChain, createNew,
     addNode, removeNode, updateNode, updateNodeConfig, updateNodePosition,
+    duplicateNodes,
     addEdge, removeEdge, updateEdge,
-    save, deleteChain, clearCanvas,
+    save, deleteChain, clearCanvas, toggleChainEnabled,
+    // 节点测试
+    nodeTestResults, nodeTestInputs,
+    setNodeTestResult, clearNodeTestResult, clearAllTestResults,
+    setNodeTestInput, getNodeTestInput,
+    hasUpstreamOutput, getUpstreamOutputs,
+    // 多标签页同步
+    saveToTab, restoreFromTab, setViewportSnapshot,
   }
 })

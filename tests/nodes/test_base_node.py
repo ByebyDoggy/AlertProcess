@@ -165,7 +165,7 @@ class TestTypeMapping:
         assert "detection_output" not in allowed
 
     def test_allowed_type_mapping_keys(self):
-        expected_types = {"context", "detection_output", "comparison_output", "score_output", "logic_output"}
+        expected_types = {"context", "detection_output", "comparison_output", "score_output", "logic_output", "memory_output"}
         assert set(ALLOWED_TYPE_MAPPING.keys()) == expected_types
 
     def test_comparator_allowed_inputs(self):

@@ -83,6 +83,28 @@ class ValidateResponse(BaseModel):
     stats: Optional[dict] = None
 
 
+# ── 单节点测试模型 ──
+
+class TestNodeRequest(BaseModel):
+    """单节点测试请求"""
+    nodes: list                              # 完整的节点列表
+    edges: list                              # 完整的边列表
+    target_node_id: str                      # 要测试的目标节点 ID
+    upstream_outputs: dict[str, Any] = {}   # 上游节点的缓存输出 {node_id: output_dict}
+    alert_data: Optional[dict] = None        # 原始告警数据（Trigger 节点或无上游时使用）
+
+
+class TestNodeResponse(BaseModel):
+    """单节点测试响应"""
+    success: bool
+    node_id: str
+    node_type: str
+    label: str
+    output: Optional[dict] = None           # 节点输出（NodeOutput 序列化）
+    duration_ms: float = 0.0
+    error: Optional[str] = None
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -475,6 +497,165 @@ async def validate_chain(
     )
 
 
+# ──────────────── 单节点测试端点 ────────────────
+
+@ruleChainRouter.post("/test-node", response_model=TestNodeResponse)
+async def test_single_node(data: TestNodeRequest):
+    """
+    测试执行规则链中的单个节点（n8n 式逐节点调试）。
+
+    支持两种输入模式:
+    1. 上游输出: upstream_outputs 中包含上游节点的缓存结果
+    2. 原始数据: 无上游时使用 alert_data 作为输入
+    """
+    from engine.context import ExecutionContext, ExecutionLogEntry
+
+    raw_config = {"nodes": [dict(n) for n in data.nodes], "edges": [dict(e) for e in data.edges]}
+    parsed_chain = ChainParser.parse(raw_config)
+
+    target_node = parsed_chain.get_node(data.target_node_id)
+    if not target_node:
+        return TestNodeResponse(
+            success=False,
+            node_id=data.target_node_id,
+            node_type="",
+            label="",
+            error=f"节点 '{data.target_node_id}' 未找到",
+        )
+
+    # 实例化目标节点
+    try:
+        node = NodeRegistry.create(
+            target_node.node_type,
+            node_id=target_node.node_id,
+            config=target_node.config,
+        )
+    except ValueError as e:
+        return TestNodeResponse(
+            success=False,
+            node_id=data.target_node_id,
+            node_type=target_node.node_type,
+            label=target_node.label or target_node.node_type,
+            error=f"实例化失败: {e}",
+        )
+
+    # 构建执行上下文，预填上游输出
+    ctx = ExecutionContext(alert_data=data.alert_data or {}, dry_run=True)
+
+    # 将上游缓存的 NodeOutput 恢复到 ctx.node_outputs
+    for nid, out_dict in data.upstream_outputs.items():
+        if isinstance(out_dict, dict):
+            from nodes.base import NodeOutput
+            # 兼容前端传入的序列化 NodeOutput
+            try:
+                restored = NodeOutput(**out_dict)
+                ctx.set_output(nid, restored)
+            except Exception:
+                pass
+
+    # 收集上游输入（应用 input_transformer）
+    incoming_edges = parsed_chain.get_incoming_edges(data.target_node_id)
+    inputs: dict[str, list] = {}
+    executor_for_transformer = ChainExecutor()
+    for edge in incoming_edges:
+        src_output = ctx.get_output(edge.source_id)
+        if src_output is not None:
+            transformed = executor_for_transformer._apply_transformer(
+                src_output, edge.input_transformer
+            )
+            inputs.setdefault(edge.target_port, []).append(transformed)
+
+    # 如果无上游输出且提供了 alert_data，直接用它作为上下文
+    if not inputs and data.alert_data:
+        ctx.alert_data = data.alert_data
+
+    # @require 上下文注入
+    required_providers = node.get_required_providers()
+    if required_providers:
+        executor = ChainExecutor()
+        merged_for_resolver = {**ctx.alert_data}
+        # 从第一个上游输出的 context 补充
+        if inputs:
+            for port_inputs in inputs.values():
+                if port_inputs:
+                    merged_for_resolver.update(port_inputs[0].context or {})
+                    break
+        extra_context = await executor._resolve_context(required_providers, merged_for_resolver)
+        if extra_context:
+            ctx.alert_data.update(extra_context)
+
+    # 执行节点
+    import time as _time
+    start_time = _time.monotonic()
+    try:
+        output = await node.execute(ctx.alert_data, inputs)
+        duration_ms = (_time.monotonic() - start_time) * 1000
+
+        # 记录到 context
+        ctx.set_output(data.target_node_id, output)
+
+        # 统一检查：提取错误信息到 error 字段，避免前端多处判断
+        error_msg = _extract_node_error(output)
+
+        return TestNodeResponse(
+            success=error_msg is None,
+            node_id=data.target_node_id,
+            node_type=target_node.node_type,
+            label=target_node.label or target_node.node_type,
+            output=output.model_dump(),
+            duration_ms=round(duration_ms, 2),
+            error=error_msg,
+        )
+    except Exception as e:
+        duration_ms = (_time.monotonic() - start_time) * 1000
+        return TestNodeResponse(
+            success=False,
+            node_id=data.target_node_id,
+            node_type=target_node.node_type,
+            label=target_node.label or target_node.node_type,
+            duration_ms=round(duration_ms, 2),
+            error=f"执行异常: {e}",
+        )
+
+
+def _extract_node_error(output) -> str | None:
+    """
+    从 NodeOutput 中统一提取错误信息。
+
+    检查优先级:
+    1. passed == False → 提取原因
+    2. context 中含 _xxx_error 键 → 提取具体报错
+    3. detection.details 含 error 键 → 提取
+    """
+    parts = []
+
+    # 1. 业务未通过
+    if output.passed is False:
+        ctx = output.context or {}
+        det = ctx.get("detection", {})
+
+        # detection 中的 reason/error 信息
+        if isinstance(det, dict):
+            reason = det.get("reason")
+            if reason:
+                parts.append(reason)
+            elif det.get("error"):
+                parts.append(det["error"])
+
+        # 如果没从 detection 取到有用信息，补充 score 说明
+        if not parts:
+            parts.append(f"未通过阈值 (score={output.score})")
+
+    # 2. context 中的 _xxx_error 键（如 _moralis_address_error）
+    if output.context:
+        for key, val in output.context.items():
+            if key.endswith("_error") and val and key != "detection":
+                label = key.lstrip("_").removesuffix("_error")
+                parts.append(f"{label}: {val}")
+
+    return "\n".join(parts) if parts else None
+
+
 @ruleChainRouter.get("/schema/node-types")
 async def get_node_types():
     """返回前端可用的节点类型及配置 schema (无需认证)"""
@@ -525,3 +706,83 @@ async def get_connection_rules():
             cat.value: list(inputs) for cat, inputs in CATEGORY_ALLOWED_INPUTS.items()
         },
     }
+
+
+# ──────────────── 输入转换器 (Input Transformer) 端点 ────────────────
+
+class TransformerValidateRequest(BaseModel):
+    expression: str
+    language: str = "python"  # python | javascript
+
+
+class TransformerValidateResponse(BaseModel):
+    valid: bool
+    error: Optional[str] = None
+    translated: Optional[str] = None  # JS 翻译后的 Python 表达式
+
+
+class TransformerPreviewRequest(BaseModel):
+    expression: str
+    language: str = "python"
+    sample_input: dict[str, Any] = {}
+
+
+class TransformerPreviewResponse(BaseModel):
+    success: bool
+    output: Optional[dict] = None
+    error: Optional[str] = None
+    translated: Optional[str] = None
+
+
+@ruleChainRouter.post("/transformer/validate", response_model=TransformerValidateResponse)
+async def validate_transformer(data: TransformerValidateRequest):
+    """
+    校验输入转换表达式语法（不执行）。
+
+    对于 JS 表达式，还会返回翻译后的 Python 等价形式。
+    """
+    from engine.transformer import InputTransformer
+
+    result = InputTransformer.validate(data.expression, data.language)
+    translated = None
+    if data.language == "javascript" and data.expression.strip():
+        try:
+            translated = InputTransformer._translate_js_to_python(data.expression.strip())
+        except Exception:
+            pass
+
+    return TransformerValidateResponse(
+        valid=result["valid"],
+        error=result.get("error"),
+        translated=translated,
+    )
+
+
+@ruleChainRouter.post("/transformer/preview", response_model=TransformerPreviewResponse)
+async def preview_transformer(data: TransformerPreviewRequest):
+    """
+    预览输入转换表达式的执行结果。
+
+    使用示例输入数据执行表达式，返回变换后的输出。
+    用于前端实时预览。
+    """
+    from engine.transformer import InputTransformer
+
+    result = InputTransformer.preview(
+        data.expression,
+        data.language,
+        data.sample_input,
+    )
+    translated = None
+    if data.language == "javascript" and data.expression.strip():
+        try:
+            translated = InputTransformer._translate_js_to_python(data.expression.strip())
+        except Exception:
+            pass
+
+    return TransformerPreviewResponse(
+        success=result["success"],
+        output=result.get("output"),
+        error=result.get("error"),
+        translated=translated,
+    )

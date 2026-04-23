@@ -41,9 +41,9 @@ def require(*provider_names: str):
     示例:
         @require("moralis_address")
         class AddressAgeDetector(BaseDetector):
-            async def detect(self, context):
-                # context 中已包含 address_create_time, address_age_days 等字段
-                age = context.get("address_age_days")
+            async def process(self, input):
+                # input.context 中已包含 address_create_time, address_age_days 等字段
+                age = input.context.get("address_age_days")
                 ...
     """
     if not provider_names:

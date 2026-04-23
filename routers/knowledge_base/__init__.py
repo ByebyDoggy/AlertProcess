@@ -1,4 +1,6 @@
-"""知识库路由 — CRUD + 搜索 + 导入/导出"""
+"""知识库路由 — CRUD + 搜索 + 导入/导出 + 链上自动获取"""
+
+import logging
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -9,6 +11,9 @@ import json
 import uuid
 
 from database.models import SessionLocal, KnowledgeBaseDB
+from routers.knowledge_base.tx_fetcher import TxFetcher, get_tx_fetcher
+
+logger = logging.getLogger(__name__)
 
 
 knowledgeBaseRouter = APIRouter(
@@ -79,6 +84,38 @@ class ImportRequest(BaseModel):
     samples: list[KnowledgeBaseCreate]
 
 
+class TxFetchRequest(BaseModel):
+    """仅需 chain_id + tx_hash，后端自动从链上获取所有数据"""
+    chain_id: int = Field(..., description="链 ID，如 1=Ethereum, 56=BSC, 137=Polygon")
+    tx_hash: str = Field(..., description="交易哈希 (0x 开头 64 位十六进制)")
+
+
+class TxFetchResponse(BaseModel):
+    """链上自动获取结果"""
+    chain_id: int
+    tx_hash: str
+    alert_data: dict[str, Any]
+    attacked_address: Optional[str] = None
+    exploiter_address: Optional[str] = None
+    title: str
+    tx_explorer_url: Optional[str] = None
+
+
+class QuickCreateRequest(BaseModel):
+    """
+    快速创建样本 — 仅需 chain_id + tx_hash，
+    后端自动从链上获取数据并创建知识库样本。
+    """
+    chain_id: int = Field(..., description="链 ID")
+    tx_hash: str = Field(..., description="交易哈希")
+    category: str = Field(default="unknown", description="分类")
+    tags: list[str] = Field(default_factory=list, description="标签")
+    description: Optional[str] = Field(default=None, description="描述")
+    expected_severity: Optional[str] = None
+    expected_labels: list[str] = []
+    expected_min_score: Optional[int] = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -109,6 +146,90 @@ def _row_to_response(row: KnowledgeBaseDB) -> KnowledgeBaseResponse:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# 链上数据自动获取端点
+# ---------------------------------------------------------------------------
+
+@knowledgeBaseRouter.post("/fetch-tx", response_model=TxFetchResponse)
+async def fetch_tx_data(
+    data: TxFetchRequest,
+    x_api_key: Optional[str] = Header(None),
+    api_key: Optional[str] = None,
+):
+    """
+    根据 chain_id + tx_hash 自动从链上获取交易数据。
+
+    返回完整的交易信息（alert_data、地址推断、标题等），
+    前端可展示预览后决定是否创建样本。
+    """
+    _auth(x_api_key, api_key)
+
+    fetcher = get_tx_fetcher()
+    try:
+        result = await fetcher.fetch(chain_id=data.chain_id, tx_hash=data.tx_hash)
+        return TxFetchResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@knowledgeBaseRouter.post("/quick-create", response_model=KnowledgeBaseResponse)
+async def quick_create_sample(
+    data: QuickCreateRequest,
+    x_api_key: Optional[str] = Header(None),
+    api_key: Optional[str] = None,
+):
+    """
+    快速创建样本 — 仅需 chain_id + tx_hash。
+
+    后端自动从链上获取交易数据，解析为标准 alert_data，
+    自动推断攻击者/被攻击地址，生成标题，一步完成创建。
+    """
+    _auth(x_api_key, api_key)
+
+    # 1. 从链上获取数据
+    fetcher = get_tx_fetcher()
+    try:
+        tx_data = await fetcher.fetch(chain_id=data.chain_id, tx_hash=data.tx_hash)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    # 2. 创建知识库样本
+    sample_id = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        row = KnowledgeBaseDB(
+            id=sample_id,
+            title=tx_data["title"],
+            description=data.description,
+            category=data.category,
+            tags=json.dumps(data.tags),
+            chain_id=tx_data["chain_id"],
+            tx_hash=tx_data["tx_hash"],
+            attacked_address=tx_data.get("attacked_address"),
+            exploiter_address=tx_data.get("exploiter_address"),
+            alert_data=json.dumps(tx_data["alert_data"]),
+            expected_severity=data.expected_severity,
+            expected_labels=json.dumps(data.expected_labels),
+            expected_min_score=data.expected_min_score,
+            source="auto_fetch",
+            tx_explorer_url=tx_data.get("tx_explorer_url"),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        logger.info(
+            f"[KB] Quick-created sample {sample_id[:8]}... "
+            f"from tx {tx_data['tx_hash'][:16]}... on chain {data.chain_id}"
+        )
+        return _row_to_response(row)
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------

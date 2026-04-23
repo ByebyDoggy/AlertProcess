@@ -1,77 +1,53 @@
-"""更新数据库动作 — 将执行结果写入数据库"""
-
 from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field, field_validator
+
 from nodes.base import NodeRegistry
-from nodes.actions.base import BaseAction
+from nodes.actions.base import BaseAction, ActionInputMixin, ActionOutputMixin
 
 
 class UpdateDatabaseAction(BaseAction):
     """
     更新数据库动作 — 将规则链执行结果写入本地数据库。
-
-    配置:
-    - table: 目标表名
-    - fields: 要写入的字段映射 {context_key: column_name}
-    - update_mode: "insert" 或 "upsert"（默认 "insert"）
     """
 
     name: str = "update_database_action"
     label: str = "更新数据库"
-    description: str = "将执行结果写入数据库"
+    description: str = "将规则链执行结果写入数据库表，支持 insert 和 upsert 两种模式。通过字段映射将 context 中的数据映射到数据库列，用于告警持久化存储"
     icon: str = "\U0001f4be"
     color: str = "#8b5cf6"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "table": {
-                    "type": "string",
-                    "default": "alerts",
-                    "description": "目标表名",
-                },
-                "fields": {
-                    "type": "object",
-                    "default": {},
-                    "description": "字段映射 {context_key: column_name}",
-                },
-                "update_mode": {
-                    "type": "string",
-                    "enum": ["insert", "upsert"],
-                    "default": "insert",
-                    "description": "写入模式",
-                },
-            },
-        }
+    # ── Pydantic 配置模型 ──
+    class ConfigModel(BaseModel):
+        table: str = Field(default="alerts", description="目标表名")
+        fields: dict[str, str] = Field(default={}, description="字段映射 {context_key: column_name}")
+        update_mode: str = Field(default="insert", description="写入模式")
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "table": "alerts",
-            "fields": {},
-            "update_mode": "insert",
-        }
+        @field_validator("table")
+        @classmethod
+        def _table_required(cls, v):
+            return v
 
-    def validate_config(self, config: dict[str, Any]) -> list[str]:
-        errors = []
-        if not config.get("table"):
-            errors.append("table is required")
-        mode = config.get("update_mode", "insert")
-        if mode not in ("insert", "upsert"):
-            errors.append("update_mode must be 'insert' or 'upsert'")
-        return errors
+        @field_validator("update_mode")
+        @classmethod
+        def _valid_mode(cls, v):
+            if v not in ("insert", "upsert"):
+                raise ValueError("update_mode must be 'insert' or 'upsert'")
+            return v
 
-    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def process(self, input: ActionInputMixin) -> ActionOutputMixin:
+        context = input.context
         table = self.config.get("table", "alerts")
         fields = self.config.get("fields", {})
         update_mode = self.config.get("update_mode", "insert")
 
         if not table:
-            return {"action": "update_database", "success": False, "error": "table not configured"}
+            return ActionOutputMixin(
+                score=0.0, passed=False, severity="UNKNOWN", labels=[],
+                action_result={"action": "update_database", "success": False, "error": "table not configured"},
+            )
 
         # 从 context 中提取要写入的字段
         row = {}
@@ -81,15 +57,18 @@ class UpdateDatabaseAction(BaseAction):
 
         # 框架实现 — 实际数据库操作需要数据库连接
         # 当前只记录意图，不执行实际 DB 操作
-        return {
-            "action": "update_database",
-            "success": True,
-            "table": table,
-            "update_mode": update_mode,
-            "row_keys": list(row.keys()),
-            "row_count": len(row),
-            "note": "framework implementation - no actual DB operation",
-        }
+        return ActionOutputMixin(
+            score=0.0, passed=True, severity="UNKNOWN", labels=[],
+            action_result={
+                "action": "update_database",
+                "success": True,
+                "table": table,
+                "update_mode": update_mode,
+                "row_keys": list(row.keys()),
+                "row_count": len(row),
+                "note": "framework implementation - no actual DB operation",
+            },
+        )
 
 
 NodeRegistry.register(UpdateDatabaseAction)

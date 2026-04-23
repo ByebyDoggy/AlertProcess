@@ -8,12 +8,15 @@ import { useChainEditorStore } from '../stores/chainEditor.js'
  *
  * 性能优化：拖拽期间直接操作 DOM style，跳过 Vue 响应式，
  * 仅在 mouseup 时将最终位置写回 store。
+ * dragTick 在每帧递增，供外部 computed 依赖以强制重算连线端点。
  */
 export function useDragDrop(canvasRef) {
   const chainDataStore = useChainDataStore()
   const editorStore = useChainEditorStore()
   const draggingNodeId = ref(null)
   const dragOffset = ref({ x: 0, y: 0 })
+  /** 拖拽帧计数器，每帧 +1，供 edgeEndpointsCache 依赖以触发重算 */
+  const dragTick = ref(0)
 
   function screenToCanvas(clientX, clientY) {
     const cr = canvasRef.value.getBoundingClientRect()
@@ -31,10 +34,7 @@ export function useDragDrop(canvasRef) {
     if (!nodeType || !canvasRef.value) return
 
     const pos = screenToCanvas(event.clientX, event.clientY)
-    const x = Math.max(0, pos.x - 115)
-    const y = Math.max(0, pos.y - 40)
-
-    chainDataStore.addNode(nodeType, x, y)
+    chainDataStore.addNode(nodeType, pos.x - 115, pos.y - 40)
   }
 
   /**
@@ -68,12 +68,14 @@ export function useDragDrop(canvasRef) {
       rafId = requestAnimationFrame(() => {
         rafId = null
         const pos = screenToCanvas(e.clientX, e.clientY)
-        const x = Math.max(0, pos.x - offsetCanvasX)
-        const y = Math.max(0, pos.y - offsetCanvasY)
+        const x = pos.x - offsetCanvasX
+        const y = pos.y - offsetCanvasY
 
         // 直接操作 DOM，跳过 Vue 响应式
         nodeEl.style.left = x + 'px'
         nodeEl.style.top = y + 'px'
+        // 递增 tick，让 edgeEndpointsCache 强制重算
+        dragTick.value++
       })
     }
 
@@ -101,5 +103,5 @@ export function useDragDrop(canvasRef) {
     document.addEventListener('mouseup', onUp)
   }
 
-  return { draggingNodeId, handleCanvasDrop, startNodeDrag }
+  return { draggingNodeId, dragTick, handleCanvasDrop, startNodeDrag }
 }

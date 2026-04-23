@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from nodes.base import (
     BaseNode,
     NodeCategory,
@@ -16,6 +18,27 @@ from nodes.base import (
     PortDef,
 )
 
+
+# ---------------------------------------------------------------------------
+# Pydantic Mixin 类（模块级定义，供子类继承扩展）
+# ---------------------------------------------------------------------------
+
+class LogicInputMixin(BaseModel):
+    """逻辑门通用输入 — 上游 passed 状态列表"""
+    passed_list: list[bool] = Field(description="上游各输入的 passed 状态列表")
+
+
+class LogicOutputMixin(BaseModel):
+    """逻辑门通用输出 Mixin"""
+    score: float = Field(description="100=逻辑真, 0=逻辑假")
+    passed: bool = Field(description="逻辑表达式求值结果")
+    severity: str = Field(default="UNKNOWN", description="严重级别")
+    detection: dict[str, Any] = Field(default_factory=dict, description="逻辑运算详情")
+
+
+# ---------------------------------------------------------------------------
+# BaseLogicNode — 逻辑表达式节点基类
+# ---------------------------------------------------------------------------
 
 class BaseLogicNode(BaseNode):
     """
@@ -26,6 +49,10 @@ class BaseLogicNode(BaseNode):
     """
 
     category: NodeCategory = NodeCategory.LOGIC
+
+    # ── Pydantic 输出/输入模型 ──
+    OutputModel: type[BaseModel] = LogicOutputMixin
+    InputModel: type[BaseModel] = LogicInputMixin
 
     @classmethod
     def get_inputs(cls) -> list[PortDef]:
@@ -61,26 +88,30 @@ class BaseLogicNode(BaseNode):
                 context={"logic_type": self.name, "result": False, "error": "no inputs"},
             )
 
-        result, details = await self.evaluate(passed_list)
+        inp = self.InputModel(passed_list=passed_list)
+        output = await self.process(inp)
+
+        result = output.passed
+        details = output.detection
         details.setdefault("logic_type", self.name)
         details["result"] = result
 
         return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=100.0 if result else 0.0,
+            score=output.score,
             passed=result,
             context=details,
         )
 
-    async def evaluate(self, passed_list: list[bool]) -> tuple[bool, dict[str, Any]]:
+    async def process(self, input: LogicInputMixin) -> LogicOutputMixin:
         """
         评估逻辑表达式（子类实现）。
 
         Args:
-            passed_list: 上游各输入的 passed 状态列表
+            input: 逻辑门输入模型，含上游 passed 状态列表
 
         Returns:
-            (result, details)
+            逻辑门输出模型（score, passed, severity, detection）
         """
-        raise NotImplementedError(f"{self.__class__.__name__}.evaluate() not implemented")
+        raise NotImplementedError(f"{self.__class__.__name__}.process() not implemented")

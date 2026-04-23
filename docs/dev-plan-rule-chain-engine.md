@@ -383,27 +383,30 @@ class BaseDetector(BaseNode):
         upstream = self._first_input(inputs)
         merged_context = {**context, **(upstream.context if upstream else {})}
 
-        score, details = await self.detect(merged_context)
+        inp = self.InputModel(context=merged_context)
+        output = await self.process(inp)
 
         return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=max(0, min(100, score)),
-            passed=score >= self.config.get("threshold", 50),
-            context={**merged_context, "detection": details},
-            labels=details.get("labels", []),
-            severity=self._score_to_severity(score),
+            score=max(0, min(100, output.score)),
+            passed=output.score >= self.config.get("threshold", 50),
+            context={**merged_context, "detection": output.detection},
+            labels=output.labels,
+            severity=output.severity,
         )
 
-    @abstractmethod
-    async def detect(self, context: dict) -> tuple[float, dict]:
+    async def process(self, input: DetectorInputMixin) -> DetectorOutputMixin:
         """
-        异步执行检测逻辑
+        异步执行检测逻辑（子类实现）
+
+        Args:
+            input: 检测器输入模型，含合并后的上下文
 
         Returns:
-            (score, details): 0-100 分 + 详细信息字典
+            检测器输出模型（score, passed, severity, labels, detection）
         """
-        ...
+        raise NotImplementedError
 ```
 
 #### 检测器评分规范
@@ -433,7 +436,8 @@ class GasPriceDetector(BaseDetector):
     icon = "⛽"
     color = "#f59e0b"
 
-    def detect(self, context: dict) -> tuple[float, dict]:
+    async def process(self, input: DetectorInputMixin) -> GasPriceOutput:
+        context = input.context
         gas_price_usd = context.get("gas_price_usd", 0)
 
         if gas_price_usd >= self.config.extreme_gas_threshold_usd:
@@ -451,9 +455,15 @@ class GasPriceDetector(BaseDetector):
         details = {
             "gas_price_usd": gas_price_usd,
             "gas_price_gwei": context.get("gas_price_gwei", 0),
-            "labels": ["high_gas"] if score >= 50 else [],
         }
-        return min(100, max(0, score)), details
+        threshold = self.config.get("threshold", 50.0)
+        return GasPriceOutput(
+            score=min(100, max(0, score)),
+            passed=score >= threshold,
+            severity=score_to_severity(score),
+            labels=["high_gas"] if score >= threshold else [],
+            detection=details,
+        )
 ```
 
 ### 3.3 条件比较器模块 (comparators/)
@@ -489,29 +499,33 @@ class BaseComparator(BaseNode):
             for inp in inputs[port_key]:
                 scores.append(inp.score)
 
-        result, details = await self.compare(scores)
+        inp = self.InputModel(scores=scores)
+        output = await self.process(inp)
 
-        output = NodeOutput(
+        result = output.passed
+        details = output.detection
+        details.setdefault("comparator_type", self.name)
+        details["result"] = result
+
+        return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=100 if result else 0,
+            score=output.score,
             passed=result,
             context=details,
         )
-        return output
 
-    @abstractmethod
-    async def compare(self, scores: list[float]) -> tuple[bool, dict]:
+    async def process(self, input: ComparatorInputMixin) -> ComparatorOutputMixin:
         """
-        执行比较逻辑
+        执行比较逻辑（子类实现）
 
         Args:
-            scores: 上游输入的 score 列表
+            input: 比较器输入模型，含上游 score 列表
 
         Returns:
-            (result, details): 比较结果 + 详细信息
+            比较器输出模型（score, passed, severity, detection）
         """
-        ...
+        raise NotImplementedError
 ```
 
 #### 比较器实现
@@ -552,8 +566,8 @@ class ThresholdComparator(BaseComparator):
             }
         }
 
-    async def compare(self, scores: list[float]) -> tuple[bool, dict]:
-        score = scores[0]  # 取第一个输入的 score
+    async def process(self, input: ComparatorInputMixin) -> ComparatorOutputMixin:
+        score = input.scores[0] if input.scores else 0
         op = self.config.get("operator", "gte")
         threshold = self.config.get("value", 50)
 
@@ -562,14 +576,18 @@ class ThresholdComparator(BaseComparator):
                "eq": lambda a, b: a == b, "neq": lambda a, b: a != b}
 
         result = ops[op](score, threshold)
-        details = {
-            "comparator_type": "threshold",
-            "score": score,
-            "threshold": threshold,
-            "operator": op,
-            "result": result,
-        }
-        return result, details
+        return ComparatorOutputMixin(
+            score=100.0 if result else 0.0,
+            passed=result,
+            severity="UNKNOWN",
+            detection={
+                "comparator_type": "threshold",
+                "score": score,
+                "threshold": threshold,
+                "operator": op,
+                "result": result,
+            },
+        )
 ```
 
 ### 3.4 评分器模块 (scorers/)
@@ -602,25 +620,27 @@ class BaseScorer(BaseNode):
             for inp in inputs[port_key]:
                 scores.append(inp.score)
 
-        agg_score, details = await self.aggregate(scores)
+        inp = self.InputModel(scores=scores)
+        output = await self.process(inp)
+
+        agg_score = max(0.0, min(100.0, output.score))
 
         return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=max(0, min(100, agg_score)),
+            score=agg_score,
             passed=agg_score >= self.config.get("threshold", 50),
-            context=details,
+            context=output.detection,
         )
 
-    @abstractmethod
-    async def aggregate(self, scores: list[float]) -> tuple[float, dict]:
+    async def process(self, input: ScorerInputMixin) -> ScorerOutputMixin:
         """
-        聚合多个分数
+        聚合多个分数（子类实现）
 
         Returns:
-            (aggregated_score, details)
+            评分器输出模型（score, passed, severity, labels, detection）
         """
-        ...
+        raise NotImplementedError
 ```
 
 #### 评分器实现
@@ -665,25 +685,28 @@ class BaseLogicNode(BaseNode):
             for inp in inputs[port_key]:
                 passed_list.append(inp.passed)
 
-        result, details = await self.evaluate(passed_list)
+        inp = self.InputModel(passed_list=passed_list)
+        output = await self.process(inp)
+
+        result = output.passed
+        details = output.detection
 
         return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=100 if result else 0,
+            score=output.score,
             passed=result,
             context=details,
         )
 
-    @abstractmethod
-    async def evaluate(self, passed_list: list[bool]) -> tuple[bool, dict]:
+    async def process(self, input: LogicInputMixin) -> LogicOutputMixin:
         """
-        评估逻辑表达式
+        评估逻辑表达式（子类实现）
 
         Returns:
-            (result, details)
+            逻辑门输出模型（score, passed, severity, detection）
         """
-        ...
+        raise NotImplementedError
 ```
 
 #### AND Gate
@@ -696,15 +719,19 @@ class AndGate(BaseLogicNode):
     label = "AND (全部满足)"
     description = "所有输入均满足条件时输出 true"
 
-    async def evaluate(self, passed_list: list[bool]) -> tuple[bool, dict]:
-        result = all(passed_list)
-        details = {
-            "logic_type": "and",
-            "matched_count": sum(passed_list),
-            "total_count": len(passed_list),
-            "all_passed": result,
-        }
-        return result, details
+    async def process(self, input: LogicInputMixin) -> LogicOutputMixin:
+        result = all(input.passed_list)
+        return LogicOutputMixin(
+            score=100.0 if result else 0.0,
+            passed=result,
+            severity="UNKNOWN",
+            detection={
+                "logic_type": "and",
+                "matched_count": sum(input.passed_list),
+                "total_count": len(input.passed_list),
+                "all_passed": result,
+            },
+        )
 ```
 
 #### OR Gate
@@ -717,15 +744,19 @@ class OrGate(BaseLogicNode):
     label = "OR (任一满足)"
     description = "任一输入满足条件时输出 true"
 
-    async def evaluate(self, passed_list: list[bool]) -> tuple[bool, dict]:
-        result = any(passed_list)
-        details = {
-            "logic_type": "or",
-            "matched_count": sum(passed_list),
-            "total_count": len(passed_list),
-            "any_passed": result,
-        }
-        return result, details
+    async def process(self, input: LogicInputMixin) -> LogicOutputMixin:
+        result = any(input.passed_list)
+        return LogicOutputMixin(
+            score=100.0 if result else 0.0,
+            passed=result,
+            severity="UNKNOWN",
+            detection={
+                "logic_type": "or",
+                "matched_count": sum(input.passed_list),
+                "total_count": len(input.passed_list),
+                "any_passed": result,
+            },
+        )
 ```
 
 ### 3.6 动作模块 (actions/) — 全异步
@@ -750,20 +781,24 @@ class BaseAction(BaseNode):
         upstream = self._first_input(inputs)
         merged_context = {**context, **(upstream.context if upstream else {})}
 
-        result = await self.run(merged_context)
+        inp = self.InputModel(
+            context=merged_context,
+            upstream_score=upstream.score if upstream else 0.0,
+            upstream_passed=upstream.passed if upstream else True,
+        )
+        output = await self.process(inp)
 
         return NodeOutput(
             node_id=self.node_id,
             node_type=self.category.value,
-            score=upstream.score if upstream else 0,
-            passed=upstream.passed if upstream else True,
-            context={**merged_context, "action_result": result},
+            score=output.score,
+            passed=output.passed,
+            context={**merged_context, "action_result": output.action_result},
         )
 
-    @abstractmethod
-    async def run(self, context: dict) -> dict:
-        """异步执行具体动作（如 HTTP 请求、数据库写入等），返回结果描述"""
-        ...
+    async def process(self, input: ActionInputMixin) -> ActionOutputMixin:
+        """执行具体动作（子类实现），返回输出模型"""
+        raise NotImplementedError
 ```
 
 #### Action 实现（框架）

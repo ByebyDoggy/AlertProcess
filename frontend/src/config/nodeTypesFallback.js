@@ -7,11 +7,12 @@
 
 export const CATEGORY_LABELS = {
   input: '输入',
+  provider: '上下文查询',
   detection: '安全检测',
-  comparison: '比较',
-  scoring: '评分',
   logic: '逻辑',
   action: '动作',
+  memory: '记忆',
+  scripting: '脚本',
 }
 
 export const PORT_LABELS = {
@@ -26,8 +27,9 @@ export const PORT_LABELS = {
 export const DATA_TYPE_LABELS = {
   context: '上下文',
   detection_output: '检测输出',
-  comparison_output: '比较输出',
   score_output: '评分输出',
   logic_output: '逻辑输出',
+  memory_output: '记忆输出',
+  script_output: '脚本输出',
   any: '任意',
 }

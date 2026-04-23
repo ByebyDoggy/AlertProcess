@@ -39,17 +39,19 @@ class ContextResolver:
     # ── 注册 ──
 
     def register(self, provider: ContextProvider) -> None:
-        """注册一个上下文提供者"""
+        """注册一个上下文提供者（同类型重复注册自动跳过）"""
         if not provider.name:
             raise ValueError(f"Provider {provider.__class__.__name__} must have a non-empty name")
         if provider.name in self._providers:
             existing = self._providers[provider.name]
-            if existing is not provider:
-                raise ValueError(
-                    f"Provider '{provider.name}' already registered by "
-                    f"{existing.__class__.__name__}, cannot re-register with "
-                    f"{provider.__class__.__name__}"
-                )
+            if existing.__class__ is provider.__class__:
+                # 同类型重复注册，跳过（uvicorn reload 等场景）
+                return
+            raise ValueError(
+                f"Provider '{provider.name}' already registered by "
+                f"{existing.__class__.__name__}, cannot re-register with "
+                f"{provider.__class__.__name__}"
+            )
         self._providers[provider.name] = provider
         logger.info(f"[ContextResolver] Registered provider: {provider.name} "
                      f"({provider.__class__.__name__}, provides: {provider.provides})")

@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from nodes.base import NodeRegistry
-from nodes.detectors.base import BaseDetector
+from pydantic import Field
+
+from nodes.base import NodeRegistry, score_to_severity
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
+
+
+class TokenAnomalyOutput(DetectorOutputMixin):
+    """代币异常检测器输出"""
+    pass
 
 
 class TokenAnomalyDetector(BaseDetector):
@@ -19,29 +27,22 @@ class TokenAnomalyDetector(BaseDetector):
     """
 
     name: str = "token_anomaly_detector"
+
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        large_transfer_threshold: float = Field(default=1000000.0, ge=0, description="大额转出阈值")
+        new_token_block: dict[int, int] = Field(
+            default={1: 17000000, 56: 25000000, 137: 45000000},
+            description="新区块基准（链ID -> 区块号）",
+        )
+
     label: str = "代币异常检测"
-    description: str = "检测异常代币转账模式"
+    description: str = "检测异常代币转账模式：大额 ERC20/ETH 转账（80 分）、新部署代币的早期活动（60 分）、非常规合约交互（30 分）。可配置各链的大额阈值和新区块号基准"
     icon: str = "\U0001f4b0"
     color: str = "#ec4899"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {"type": "number", "minimum": 0, "maximum": 100, "default": 50},
-                "large_transfer_threshold": {"type": "number", "default": 1000000.0},
-                "new_token_block": {"type": "object", "default": {1: 17000000, 56: 25000000, 137: 45000000}},
-            },
-        }
-
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 50,
-            "large_transfer_threshold": 1000000.0,
-            "new_token_block": {1: 17000000, 56: 25000000, 137: 45000000},
-        }
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = TokenAnomalyOutput
 
     @staticmethod
     def _parse_transfer_data(input_data: str) -> dict[str, Any] | None:
@@ -60,12 +61,12 @@ class TokenAnomalyDetector(BaseDetector):
             pass
         return None
 
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
-        to_address = context.get("to_address", "")
-        input_data = context.get("input_data", "")
-        value = context.get("value", 0)
-        block_number = context.get("block_number")
-        chain_id = context.get("chain_id", 1)
+    async def process(self, tx_context: TransactionContext) -> TokenAnomalyOutput:
+        to_address = tx_context.to_address or ""
+        input_data = tx_context.input_data or ""
+        value = tx_context.value or 0
+        block_number = tx_context.block_number
+        chain_id = tx_context.chain_id or 1
 
         issues: list[str] = []
         score = 0.0
@@ -102,14 +103,19 @@ class TokenAnomalyDetector(BaseDetector):
                 score = max(score, 60)
 
         labels = issues if score >= self.config.get("threshold", 50) else []
-        return score, {
-            "to_address": to_address,
-            "value": value,
-            "transfer_info": transfer_info,
-            "block_number": block_number,
-            "detected_issues": issues,
-            "labels": labels,
-        }
+        threshold = self.config.get("threshold", 50.0)
+        return TokenAnomalyOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels,
+            detection={
+                "to_address": to_address,
+                "value": value,
+                "transfer_info": transfer_info,
+                "block_number": block_number,
+                "detected_issues": issues,
+                "labels": labels,
+            },
+        )
 
 
 NodeRegistry.register(TokenAnomalyDetector)

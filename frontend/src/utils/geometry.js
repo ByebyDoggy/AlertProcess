@@ -2,21 +2,26 @@
  * 画布几何计算
  */
 
-const NODE_WIDTH = 230
+const NODE_WIDTH = 300
 const HEADER_HEIGHT = 44
 const PORT_ROW_HEIGHT = 26
 const PORT_START_Y = HEADER_HEIGHT + 8 + 6
+/** 端口圆圈半径偏移（port-anchor 的 left:-7px / right:-7px，圆心距节点边缘 7px） */
+const PORT_ANCHOR_OFFSET = 7
 
 /**
  * 计算端口在画布中的绝对位置
+ *
+ * 坐标指向 port-anchor 圆圈的圆心，
+ * 与 .input-port-anchor(left:-7px) / .output-port-anchor(right:-7px) 对齐。
  */
 export function getPortPosition(node, portKey, side, portIndex = 0) {
   const y = node.position.y + PORT_START_Y + portIndex * PORT_ROW_HEIGHT
 
   if (side === 'left') {
-    return { x: node.position.x, y }
+    return { x: node.position.x - PORT_ANCHOR_OFFSET, y }
   }
-  return { x: node.position.x + NODE_WIDTH, y }
+  return { x: node.position.x + NODE_WIDTH + PORT_ANCHOR_OFFSET, y }
 }
 
 /**

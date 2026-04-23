@@ -1,89 +1,49 @@
-"""Webhook 通知动作 — 异步发送 HTTP Webhook"""
-
 from __future__ import annotations
 
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, Field, field_validator
 
 from nodes.base import NodeRegistry
-from nodes.actions.base import BaseAction
+from nodes.actions.base import BaseAction, ActionInputMixin, ActionOutputMixin
 
 
 class NotifyWebhookAction(BaseAction):
     """
     Webhook 通知动作 — 异步发送 HTTP POST 请求到指定 URL。
-
-    配置:
-    - url: Webhook URL
-    - method: HTTP 方法（默认 POST）
-    - headers: 自定义请求头
-    - timeout: 超时秒数（默认 10）
-    - include_fields: 要包含的字段列表（默认发送完整 context）
     """
 
     name: str = "notify_webhook_action"
     label: str = "Webhook 通知"
-    description: str = "异步发送 Webhook HTTP 请求"
+    description: str = "异步发送 HTTP 请求到指定 Webhook URL，支持 POST/PUT/PATCH 方法和自定义 Headers。可筛选要包含的字段，适用于对接外部告警平台或 Slack/Discord"
     icon: str = "\U0001f517"
     color: str = "#3b82f6"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "format": "uri",
-                    "description": "Webhook URL",
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["POST", "PUT", "PATCH"],
-                    "default": "POST",
-                },
-                "headers": {
-                    "type": "object",
-                    "default": {"Content-Type": "application/json"},
-                    "description": "自定义请求头",
-                },
-                "timeout": {
-                    "type": "number",
-                    "minimum": 1,
-                    "maximum": 60,
-                    "default": 10,
-                    "description": "超时秒数",
-                },
-                "include_fields": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "default": [],
-                    "description": "要包含的字段（空列表=全部）",
-                },
-            },
-        }
+    # ── Pydantic 配置模型 ──
+    class ConfigModel(BaseModel):
+        url: str = Field(default="", description="Webhook URL")
+        method: str = Field(default="POST", description="HTTP 方法")
+        headers: dict[str, str] = Field(
+            default={"Content-Type": "application/json"}, description="自定义请求头"
+        )
+        timeout: int = Field(default=10, ge=1, le=60, description="超时秒数")
+        include_fields: list[str] = Field(default=[], description="要包含的字段（空列表=全部）")
 
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "url": "",
-            "method": "POST",
-            "headers": {"Content-Type": "application/json"},
-            "timeout": 10,
-            "include_fields": [],
-        }
+        @field_validator("url")
+        @classmethod
+        def _url_required(cls, v):
+            return v
 
-    def validate_config(self, config: dict[str, Any]) -> list[str]:
-        errors = []
-        if not config.get("url"):
-            errors.append("url is required")
-        method = config.get("method", "POST")
-        if method not in ("POST", "PUT", "PATCH"):
-            errors.append("method must be POST, PUT or PATCH")
-        return errors
+        @field_validator("method")
+        @classmethod
+        def _valid_method(cls, v):
+            if v not in ("POST", "PUT", "PATCH"):
+                raise ValueError("method must be POST, PUT or PATCH")
+            return v
 
-    async def run(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def process(self, input: ActionInputMixin) -> ActionOutputMixin:
+        context = input.context
         url = self.config.get("url", "")
         method = self.config.get("method", "POST")
         headers = self.config.get("headers", {"Content-Type": "application/json"})
@@ -91,7 +51,10 @@ class NotifyWebhookAction(BaseAction):
         include_fields = self.config.get("include_fields", [])
 
         if not url:
-            return {"action": "notify_webhook", "success": False, "error": "url not configured"}
+            return ActionOutputMixin(
+                score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                action_result={"action": "notify_webhook", "success": False, "error": "url not configured"},
+            )
 
         # 构建请求体
         if include_fields:
@@ -104,16 +67,25 @@ class NotifyWebhookAction(BaseAction):
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(method, url, json=payload, headers=headers)
 
-            return {
-                "action": "notify_webhook",
-                "success": 200 <= response.status_code < 300,
-                "status_code": response.status_code,
-                "url": url,
-            }
+            return ActionOutputMixin(
+                score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                action_result={
+                    "action": "notify_webhook",
+                    "success": 200 <= response.status_code < 300,
+                    "status_code": response.status_code,
+                    "url": url,
+                },
+            )
         except httpx.TimeoutException:
-            return {"action": "notify_webhook", "success": False, "error": "timeout", "url": url}
+            return ActionOutputMixin(
+                score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                action_result={"action": "notify_webhook", "success": False, "error": "timeout", "url": url},
+            )
         except Exception as e:
-            return {"action": "notify_webhook", "success": False, "error": str(e), "url": url}
+            return ActionOutputMixin(
+                score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                action_result={"action": "notify_webhook", "success": False, "error": str(e), "url": url},
+            )
 
 
 NodeRegistry.register(NotifyWebhookAction)

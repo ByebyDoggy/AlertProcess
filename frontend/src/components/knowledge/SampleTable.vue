@@ -59,7 +59,7 @@
         <tbody>
           <tr v-for="s in store.samples" :key="s.id" class="table-row">
             <td class="td-title">
-              <span class="title-text" @click="$emit('detail', s)">{{ s.title }}</span>
+              <span class="title-text" :title="s.title" @click="$emit('detail', s)">{{ s.title }}</span>
             </td>
             <td>
               <span class="cat-badge">{{ store.getCategoryLabel(s.category) }}</span>
@@ -263,12 +263,19 @@ onMounted(() => {
   background: rgba(99, 102, 241, 0.04);
 }
 .td-title {
-  max-width: 200px;
+  max-width: 260px;
+  min-width: 0;
+  overflow: hidden;
 }
 .title-text {
+  display: inline-block;
+  max-width: 100%;
   color: #e2e8f0;
   cursor: pointer;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .title-text:hover {
   color: #6366f1;
@@ -282,6 +289,8 @@ onMounted(() => {
 }
 .td-tags {
   max-width: 160px;
+  min-width: 0;
+  overflow: hidden;
 }
 .tag-chip {
   display: inline-block;

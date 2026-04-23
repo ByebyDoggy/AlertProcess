@@ -213,57 +213,79 @@ async def test_token_price_cache():
 
 
 async def test_data_models():
-    """Test 2: Data models — IngestedLog, TxLogsGroup, MatchedAlert"""
-    print("\n--- Test 2: Data Models ---")
+    """Test 2: Data models — 兼容层 + 统一模型双验证"""
+    print("\n--- Test 2: Data Models (compat + unified) ---")
 
+    # ---- Part A: 兼容层 dataclass（ingest_router 使用）----
     from detectors.trace.rule_engine import IngestedLog, TxLogsGroup, MatchedAlert, Severity
 
-    # IngestedLog
     log_dict = FLASH_LOAN_LOGS[0]
     ingested = IngestedLog.from_dict(log_dict)
     assert ingested.address == "0x7d2768de32b0b80b7a3454c06b0ac3200957b515"
     assert ingested.block_number == 19584123
     assert len(ingested.topics) == 6
     assert ingested.removed is False
-    print(f"    IngestedLog: address={ingested.address[:16]}... topics={len(ingested.topics)}")
+    print(f"    [compat] IngestedLog: address={ingested.address[:16]}... topics={len(ingested.topics)}")
 
-    # TxLogsGroup
-    logs = [IngestedLog.from_dict(l) for l in FLASH_LOAN_LOGS]
+    logs_compat = [IngestedLog.from_dict(l) for l in FLASH_LOAN_LOGS]
     group = TxLogsGroup(
         tx_hash=FLASH_LOAN_LOGS[0]["transaction_hash"],
         chain_id=1,
-        logs=logs,
+        logs=logs_compat,
         block_number=19584123,
     )
     assert group.log_count == 2
-    assert len(group.unique_addresses) >= 1
-    print(f"    TxLogsGroup: {group.log_count} logs, "
-          f"{len(group.unique_addresses)} unique addrs, "
-          f"{len(group.unique_topics)} unique topics")
 
-    # MatchedAlert
     alert = MatchedAlert(
-        tx_hash=group.tx_hash,
-        chain_id=1,
-        block_number=19584123,
-        trigger_log_count=group.log_count,
-        final_score=85.0,
+        tx_hash=group.tx_hash, chain_id=1, block_number=19584123,
+        trigger_log_count=group.log_count, final_score=85.0,
         final_severity="HIGH",
         labels=["FLASH_LOAN_PROTOCOL:Aave V2"],
-        results=[
-            {"node_id": "n1", "node_type": "flash_loan_detector", "score": 85.0},
-        ],
+        results=[{"node_id": "n1", "node_type": "flash_loan_detector", "score": 85.0}],
     )
     bm = alert.best_match
-    assert bm["alert_type"] == "flash_loan_detector"
     assert bm["severity"] == "HIGH"
-    d = alert.to_dict()
-    assert d["txHash"] == group.tx_hash
-    assert d["finalScore"] == 85.0
-    print(f"    MatchedAlert: score={alert.final_score} severity={alert.final_severity}")
-    print(f"    best_match: type={bm['alert_type']} conf={bm['confidence']}")
 
-    print("  [PASS] All data models work correctly")
+    # ---- Part B: 统一 Pydantic 模型（回测/测试路径）----
+    from models.ingest import EventLog, AlertData as UnifiedAlertData
+
+    # EventLog.from_raw 与 IngestedLog.from_dict 结果一致
+    event_log = EventLog.from_raw(log_dict)
+    assert event_log.address == ingested.address.lower()
+    assert event_log.block_number == ingested.block_number
+    assert len(event_log.topics) == len(ingested.topics)
+    print(f"    [unified] EventLog.from_raw() matches IngestedLog.from_dict(): OK")
+
+    # AlertData.from_logs 直接构造引擎输入
+    all_event_logs = [EventLog.from_raw(l) for l in FLASH_LOAN_LOGS]
+    unified_alert = UnifiedAlertData.from_logs(
+        logs=all_event_logs,
+        tx_hash=FLASH_LOAN_LOGS[0]["transaction_hash"],
+        chain_id=1,
+        block_number=19584123,
+    )
+    alert_dict = unified_alert.model_dump()
+
+    # 验证输出包含所有必需字段
+    required = {
+        "tx_hash", "chain_id", "block_number", "logs", "log_count",
+        "unique_contracts", "unique_contract_count",
+        "unique_topics", "unique_topic_count",
+        "transfer_events", "transfer_event_count", "received_at",
+    }
+    assert required <= set(alert_dict.keys()), f"缺少字段: {required - set(alert_dict.keys())}"
+    assert alert_dict["log_count"] == 2
+    assert alert_dict["transfer_event_count"] >= 1  # 第2条是 Transfer
+    print(f"    [unified] AlertData.from_logs(): {alert_dict['log_count']} logs, "
+          f"{alert_dict['transfer_event_count']} transfers")
+
+    # JSON 序列化验证（引擎需要）
+    json_str = json.dumps(alert_dict)
+    parsed_back = json.loads(json_str)
+    assert parsed_back["tx_hash"] == alert_dict["tx_hash"]
+    print(f"    [unified] JSON round-trip: OK ({len(json_str)} bytes)")
+
+    print("  [PASS] All data models work correctly (compat + unified)")
     return True
 
 

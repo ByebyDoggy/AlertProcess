@@ -30,13 +30,36 @@
 
       <!-- Select (enum) -->
       <select
-        v-else-if="field.enum"
+        v-else-if="field.enum && !isModeField(key)"
         :value="model[key]"
         @change="update(key, $event.target.value)"
         class="form-select"
       >
         <option v-for="opt in field.enum" :key="opt" :value="opt">{{ opt }}</option>
       </select>
+
+      <!-- Mode selector: 渲染为 tab 切换按钮组（不显示普通 select） -->
+      <div v-else-if="isModeField(key)" class="flex gap-1 p-1 rounded-lg bg-[#16162a] border border-[#2d2d50]">
+        <button
+          v-for="opt in field.enum"
+          :key="opt"
+          @click="update(key, opt)"
+          :class="[
+            'flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition',
+            model[key] === opt
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'text-gray-400 hover:text-white hover:bg-[#252545]'
+          ]"
+        >{{ getModeLabel(field, opt) }}</button>
+      </div>
+
+      <!-- Code editor (Python, syntax highlighted) -->
+      <PythonEditor
+        v-else-if="field['x-editor'] === 'python' || field.type === 'code'"
+        :modelValue="model[key] || ''"
+        :placeholder="field.description || ''"
+        @update:modelValue="update(key, $event)"
+      />
 
       <!-- Textarea (for templates, etc.) -->
       <textarea
@@ -89,6 +112,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import PythonEditor from './PythonEditor.vue'
 
 const props = defineProps({
   schema: { type: Object, default: () => ({}) },
@@ -100,8 +124,33 @@ const model = computed(() => props.modelValue)
 
 const visibleFields = computed(() => {
   const properties = props.schema?.properties || {}
-  return properties
+  // 支持 x-visible-when 条件显示：{"mode": "simple"} 表示仅当 model.mode === "simple" 时显示
+  const filtered = {}
+  for (const [key, field] of Object.entries(properties)) {
+    const condition = field['x-visible-when']
+    if (condition) {
+      let show = true
+      for (const [condKey, condVal] of Object.entries(condition)) {
+        if (model.value[condKey] !== condVal) { show = false; break }
+      }
+      if (!show) continue
+    }
+    filtered[key] = field
+  }
+  return filtered
 })
+
+/** 判断字段是否为模式切换字段（x-mode-selector 标记） */
+function isModeField(key) {
+  const field = props.schema?.properties?.[key]
+  return !!field?.['x-mode-selector']
+}
+
+/** 获取模式标签（从 x-mode-labels 映射） */
+function getModeLabel(field, value) {
+  const labels = field['x-mode-labels'] || {}
+  return labels[value] || value
+}
 
 const LONG_TEXT_KEYS = ['message_template', 'template', 'pattern']
 

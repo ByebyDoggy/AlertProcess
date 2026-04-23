@@ -6,12 +6,13 @@
 - 分层: 同层（无依赖关系）的节点 asyncio.gather 并发执行
 - 根据输出端口（true/false）决定下游路径
 - 全链路 async/await，不阻塞事件循环
-- @require 上下文自动注入: 执行前按需调用 Provider 填充上下文
+- ContextProvider 现在作为节点存在，无需 @require 装饰器注入
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from typing import Any
@@ -20,6 +21,8 @@ from engine.context import ExecutionContext, ExecutionLogEntry
 from engine.parser import ParsedChain, ParsedEdge
 from engine.validator import ChainValidator, ValidationError
 from nodes.base import BaseNode, NodeOutput, NodeRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class ChainExecutor:
@@ -49,8 +52,20 @@ class ChainExecutor:
         """
         ctx = ExecutionContext(alert_data=alert_data, dry_run=dry_run)
 
-        # 清空上下文缓存（每次规则链执行开始时重置）
-        self._clear_context_cache()
+        # ── 注入记忆上下文 ──
+        # 从全局 MemoryStore 读取所有记忆，注入到 alert_data
+        try:
+            from nodes.memory.store import get_memory_store
+            mem_store = get_memory_store()
+            mem_context = mem_store.retrieve_all_merged()
+            if mem_context:
+                ctx.alert_data.update(mem_context)
+                logger.debug(
+                    f"[ChainExecutor] Injected {len(mem_context)} memory fields "
+                    f"into alert_data"
+                )
+        except Exception as e:
+            logger.warning(f"[ChainExecutor] Memory injection failed: {e}")
 
         # 1. 校验规则链
         validation_errors = self._validator.validate(chain)
@@ -124,21 +139,6 @@ class ChainExecutor:
         if not self._should_execute(node_id, chain, ctx):
             return
 
-        # ── @require 上下文自动注入 ──
-        required_providers = node.get_required_providers()
-        if required_providers:
-            # 构建合并上下文（与 BaseDetector._merge_context 逻辑一致）
-            upstream = self._first_upstream_output(inputs)
-            merged_for_resolver = {**ctx.alert_data, **(upstream.context if upstream else {})}
-
-            # 调用 ContextResolver 填充上下文
-            extra_context = await self._resolve_context(
-                required_providers, merged_for_resolver
-            )
-            if extra_context:
-                # 注入到 alert_data 中，节点执行时自动获取
-                ctx.alert_data.update(extra_context)
-
         # 执行
         start_time = time.monotonic()
         try:
@@ -184,6 +184,9 @@ class ChainExecutor:
         """
         收集指定节点的所有输入。
 
+        如果 edge 上配置了 input_transformer，会对上游输出应用变换。
+        变换作用于 NodeOutput.context 字段，替换为表达式求值结果。
+
         Returns:
             { target_port_key: [NodeOutput, ...] }
         """
@@ -193,12 +196,70 @@ class ChainExecutor:
         for edge in incoming_edges:
             source_output = ctx.get_output(edge.source_id)
             if source_output is not None:
-                # 只收集匹配 source_port 的输出
-                # 对于多输出端口节点（如 true/false），需要检查上游输出是否
-                # 应该走这条边
-                inputs[edge.target_port].append(source_output)
+                # 应用 input_transformer（如果配置了）
+                transformed_output = self._apply_transformer(
+                    source_output, edge.input_transformer
+                )
+                inputs[edge.target_port].append(transformed_output)
 
         return dict(inputs)
+
+    def _apply_transformer(
+        self,
+        output: NodeOutput,
+        transformer: dict[str, Any] | None,
+    ) -> NodeOutput:
+        """
+        对上游输出应用 input_transformer 变换。
+
+        transformer 格式: {"expression": "...", "language": "python"|"javascript"}
+        如果 transformer 为 None 或表达式为空，返回原始输出。
+
+        变换以 output 的完整数据（score/passed/severity/labels + context）作为 input，
+        表达式返回的新字典替换 output.context。
+        """
+        if not transformer:
+            return output
+
+        expression = transformer.get("expression", "")
+        language = transformer.get("language", "python")
+
+        if not expression or not expression.strip():
+            return output
+
+        try:
+            from engine.transformer import InputTransformer
+            # 构建完整的 input 数据：顶层字段 + context 合并
+            # 这样用户可以在表达式中访问 input.score, input.passed, input.xxx 等
+            input_data = {
+                "score": output.score,
+                "passed": output.passed,
+                "severity": output.severity,
+                "labels": output.labels,
+                **output.context,
+            }
+            transformed_context = InputTransformer.evaluate(
+                expression=expression,
+                language=language,
+                input_data=input_data,
+            )
+            # 构造新的 NodeOutput，用变换后的 context 替换原始的
+            return NodeOutput(
+                node_id=output.node_id,
+                node_type=output.node_type,
+                score=output.score,
+                passed=output.passed,
+                context=transformed_context,
+                labels=output.labels,
+                severity=output.severity,
+            )
+        except Exception as e:
+            logger.warning(
+                "[ChainExecutor] input_transformer failed on edge from '%s': %s",
+                output.node_id, e,
+            )
+            # 变换失败时返回原始输出（不阻断链路执行）
+            return output
 
     def _should_execute(
         self,
@@ -212,10 +273,31 @@ class ChainExecutor:
         对于通过 true/false 端口连接的边:
         - true 端口: 上游 passed=True 时才执行下游
         - false 端口: 上游 passed=False 时才执行下游
+
+        如果上游节点设置了 early_stop=True，则阻止所有下游执行。
+        例外: MEMORY 类别节点不受 early_stop 影响（记忆读取等应独立于单次交易状态）。
         """
         incoming_edges = chain.get_incoming_edges(node_id)
         if not incoming_edges:
             return True
+
+        # MEMORY 类别节点跳过 early_stop 检查（如 MemoryRecall 无输入端口时也需正常输出）
+        node_def = chain.get_node(node_id)
+        is_memory_node = False
+        if node_def and node_def.node_type:
+            from nodes.base import NodeRegistry as NR
+            node_cls = NR.get(node_def.node_type)
+            if node_cls and hasattr(node_cls, "category"):
+                from nodes.base import NodeCategory
+                is_memory_node = (node_cls.category == NodeCategory.MEMORY)
+
+        # 检查是否有上游节点触发了 early_stop（MEMORY 节点跳过此检查）
+        if not is_memory_node:
+            for edge in incoming_edges:
+                source_output = ctx.get_output(edge.source_id)
+                if source_output is not None and source_output.early_stop:
+                    # 上游节点提前停止，阻止下游执行（Memory 除外）
+                    return False
 
         for edge in incoming_edges:
             source_output = ctx.get_output(edge.source_id)
@@ -279,48 +361,3 @@ class ChainExecutor:
             return []  # 有环
 
         return layers
-
-    # ------------------------------------------------------------------
-    # @require 上下文解析辅助
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _first_upstream_output(
-        inputs: dict[str, list[NodeOutput]],
-    ) -> NodeOutput | None:
-        """从 inputs 中获取第一个可用的上游输出"""
-        for port_key in sorted(inputs.keys()):
-            if inputs[port_key]:
-                return inputs[port_key][0]
-        return None
-
-    async def _resolve_context(
-        self,
-        provider_names: tuple[str, ...] | list[str],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        """
-        调用 ContextResolver 解析 @require 声明的上下文。
-
-        如果 resolver 不可用（如未初始化），静默返回空 dict。
-        """
-        try:
-            from nodes.context import get_context_resolver
-            resolver = get_context_resolver()
-            return await resolver.resolve(list(provider_names), context)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[ChainExecutor] Context resolution failed: {e}"
-            )
-            return {}
-
-    @staticmethod
-    def _clear_context_cache() -> None:
-        """清空 ContextResolver 的执行级缓存"""
-        try:
-            from nodes.context import get_context_resolver
-            resolver = get_context_resolver()
-            resolver.clear_cache()
-        except Exception:
-            pass

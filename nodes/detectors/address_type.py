@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from nodes.base import NodeRegistry
-from nodes.detectors.base import BaseDetector
+from pydantic import Field
+
+from nodes.base import NodeRegistry, score_to_severity
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
+
+
+class AddressTypeOutput(DetectorOutputMixin):
+    """地址类型检测器输出"""
+    pass
 
 
 class AddressTypeDetector(BaseDetector):
@@ -21,50 +29,28 @@ class AddressTypeDetector(BaseDetector):
 
     name: str = "address_type_detector"
     label: str = "地址类型检测"
-    description: str = "检测 null 地址交易和合约创建模式"
+
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        threshold: float = Field(default=30.0, ge=0, le=100, description="passed 阈值")
+        check_null_to: bool = Field(default=True, description="检测 null 'to' 地址")
+        check_null_from: bool = Field(default=True, description="检测 null 'from' 地址")
+        check_contract_creation: bool = Field(default=True, description="检测合约创建模式")
+
+    description: str = "检测可疑地址类型：null 地址转账（合约创建/销毁）、携带 ETH 的合约创建（85 分）、null 来源地址（90 分）。常用于识别部署攻击合约或资金销毁操作"
     icon: str = "\U0001f3e0"
     color: str = "#8b5cf6"
 
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = AddressTypeOutput
+
     NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {
-                    "type": "number", "minimum": 0, "maximum": 100,
-                    "default": 30, "description": "passed 阈值"
-                },
-                "check_null_to": {
-                    "type": "boolean", "default": True,
-                    "description": "检测 null 'to' 地址"
-                },
-                "check_null_from": {
-                    "type": "boolean", "default": True,
-                    "description": "检测 null 'from' 地址"
-                },
-                "check_contract_creation": {
-                    "type": "boolean", "default": True,
-                    "description": "检测合约创建模式"
-                },
-            },
-        }
-
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 30,
-            "check_null_to": True,
-            "check_null_from": True,
-            "check_contract_creation": True,
-        }
-
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
-        to_addr = context.get("to_address", "")
-        from_addr = context.get("from_address", "")
-        value = context.get("value", 0)
-        input_data = context.get("input_data", "0x")
+    async def process(self, tx_context: TransactionContext) -> AddressTypeOutput:
+        to_addr = tx_context.to_address or ""
+        from_addr = tx_context.from_address or ""
+        value = tx_context.value or 0
+        input_data = tx_context.input_data or "0x"
 
         is_null_to = to_addr.lower() == self.NULL_ADDRESS.lower() if to_addr else False
         is_null_from = from_addr.lower() == self.NULL_ADDRESS.lower() if from_addr else False
@@ -98,6 +84,7 @@ class AddressTypeDetector(BaseDetector):
                     alert_type = "NULL_TO_ADDRESS"
 
         labels = issues if score >= self.config.get("threshold", 30) else []
+        threshold = self.config.get("threshold", 30.0)
 
         details: dict[str, Any] = {
             "from_address": from_addr,
@@ -109,7 +96,10 @@ class AddressTypeDetector(BaseDetector):
             "alert_type": alert_type,
             "labels": labels,
         }
-        return score, details
+        return AddressTypeOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels, detection=details,
+        )
 
 
 NodeRegistry.register(AddressTypeDetector)

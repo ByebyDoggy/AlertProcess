@@ -4,6 +4,7 @@ import { ref, computed } from 'vue'
 export const useChainEditorStore = defineStore('chainEditor', () => {
   const selectedNodeId = ref(null)
   const selectedEdgeId = ref(null)
+  const selectedNodeIds = ref([])  // Shift 框选的多个节点
   const showNodeConfig = ref(false)
   const showEdgeConfig = ref(false)
   const saving = ref(false)
@@ -31,17 +32,36 @@ export const useChainEditorStore = defineStore('chainEditor', () => {
     selectedNodeId.value = nodeId
     selectedEdgeId.value = null
     showEdgeConfig.value = false
+    selectedNodeIds.value = []  // 单选时清空多选
   }
 
   function selectEdge(edgeId) {
     selectedEdgeId.value = edgeId
     selectedNodeId.value = null
     showNodeConfig.value = false
+    selectedNodeIds.value = []
   }
 
   function clearSelection() {
     selectedNodeId.value = null
     selectedEdgeId.value = null
+    selectedNodeIds.value = []
+  }
+
+  /** 设置框选的节点列表 */
+  function setSelectedNodes(ids) {
+    selectedNodeIds.value = ids
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
+  }
+
+  /** 从框选中移除某个节点 */
+  function removeFromSelection(nodeId) {
+    selectedNodeIds.value = selectedNodeIds.value.filter(id => id !== nodeId)
+    if (selectedNodeIds.value.length === 1) {
+      selectedNodeId.value = selectedNodeIds.value[0]
+      selectedNodeIds.value = []
+    }
   }
 
   function openNodeConfig(nodeId) {
@@ -107,18 +127,25 @@ export const useChainEditorStore = defineStore('chainEditor', () => {
     panY.value = 0
   }
 
+  function setViewport(newZoom, newPanX, newPanY) {
+    zoom.value = Math.max(0.2, Math.min(3, newZoom))
+    panX.value = newPanX
+    panY.value = newPanY
+  }
+
   return {
-    selectedNodeId, selectedEdgeId,
+    selectedNodeId, selectedEdgeId, selectedNodeIds,
     showNodeConfig, showEdgeConfig,
     saving, validationErrors, validationValid,
     selectedNode, selectedEdge,
     connecting, connSource, tempLine, tempLineValid, tempLineReason,
     zoom, panX, panY,
     selectNode, selectEdge, clearSelection,
+    setSelectedNodes, removeFromSelection,
     openNodeConfig, closeNodeConfig,
     openEdgeConfig, closeEdgeConfig,
     startConnection, updateTempLine, updateTempLineValidation,
     finishConnection, cancelConnection,
-    setZoom, resetView,
+    setZoom, resetView, setViewport,
   }
 })

@@ -8,6 +8,7 @@ from nodes.detectors.token_anomaly import TokenAnomalyDetector
 from nodes.detectors.address_graph import AddressGraphDetector
 from nodes.detectors.address_age import AddressAgeDetector
 from nodes.detectors.arkm_label import ARKMLabelDetector
+from nodes.detectors.fund_drain import FundDrainDetector
 
 __all__ = [
     "BaseDetector",
@@ -19,4 +20,5 @@ __all__ = [
     "AddressGraphDetector",
     "AddressAgeDetector",
     "ARKMLabelDetector",
+    "FundDrainDetector",
 ]

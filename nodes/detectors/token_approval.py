@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import Field
+
 from nodes.base import NodeRegistry
-from nodes.detectors.base import BaseDetector
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorInputMixin, DetectorOutputMixin
 
 MAX_UINT256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
 
@@ -22,6 +24,11 @@ SUSPICIOUS_APPROVAL_TARGETS: dict[str, str] = {
 }
 
 
+class TokenApprovalOutput(DetectorOutputMixin):
+    """ERC20 授权检测器输出"""
+    pass
+
+
 class TokenApprovalDetector(BaseDetector):
     """
     ERC20 授权检测器 — 检测可疑的 ERC20 授权操作。
@@ -34,29 +41,19 @@ class TokenApprovalDetector(BaseDetector):
     """
 
     name: str = "token_approval_detector"
+
+    # ── Pydantic 配置模型 (继承 DetectorConfigMixin，包含共享的 threshold) ──
+    class ConfigModel(DetectorConfigMixin):
+        check_approval_to_unknown: bool = Field(default=True, description="检测向未知合约授权")
+        check_infinite_approval: bool = Field(default=True, description="检测无限授权")
+
     label: str = "ERC20 授权检测"
-    description: str = "检测可疑的 ERC20 token 授权"
+    description: str = "检测危险的 ERC20 授权操作：无限授权 approve(MAX_UINT256) 给 80 分、setApprovalForAll 60 分、授权给未知合约 50 分。是识别盗币/钓鱼攻击前兆的关键检测器"
     icon: str = "\U0001f512"
     color: str = "#f97316"
 
-    @classmethod
-    def get_config_schema(cls) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "threshold": {"type": "number", "minimum": 0, "maximum": 100, "default": 50},
-                "check_approval_to_unknown": {"type": "boolean", "default": True},
-                "check_infinite_approval": {"type": "boolean", "default": True},
-            },
-        }
-
-    @classmethod
-    def get_default_config(cls) -> dict[str, Any]:
-        return {
-            "threshold": 50,
-            "check_approval_to_unknown": True,
-            "check_infinite_approval": True,
-        }
+    # ── Pydantic 输出模型 ──
+    OutputModel: type = TokenApprovalOutput
 
     @staticmethod
     def _parse_approval(input_data: str) -> dict[str, Any] | None:
@@ -84,12 +81,16 @@ class TokenApprovalDetector(BaseDetector):
     def _is_infinite_approval(amount: int) -> bool:
         return amount >= MAX_UINT256 * 0.99
 
-    async def detect(self, context: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    async def process(self, input: DetectorInputMixin) -> TokenApprovalOutput:
+        context = input.context
         input_data = context.get("input_data", "")
         approval = self._parse_approval(input_data)
 
         if not approval:
-            return 0.0, {"error": "not an approval transaction"}
+            return TokenApprovalOutput(
+                score=0.0, passed=True, severity="UNKNOWN", labels=[],
+                detection={"error": "not an approval transaction"}
+            )
 
         issues: list[str] = []
         score = 0.0
@@ -121,12 +122,18 @@ class TokenApprovalDetector(BaseDetector):
                     score = max(score, 60)
 
         labels = issues if score >= self.config.get("threshold", 50) else []
-        return score, {
-            "method": method,
-            "approval_info": approval,
-            "detected_issues": issues,
-            "labels": labels,
-        }
+        threshold = self.config.get("threshold", 50.0)
+        from nodes.base import score_to_severity
+        return TokenApprovalOutput(
+            score=score, passed=score >= threshold, severity=score_to_severity(score),
+            labels=labels,
+            detection={
+                "method": method,
+                "approval_info": approval,
+                "detected_issues": issues,
+                "labels": labels,
+            },
+        )
 
 
 NodeRegistry.register(TokenApprovalDetector)

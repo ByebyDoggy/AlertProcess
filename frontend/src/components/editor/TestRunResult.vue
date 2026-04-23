@@ -1,8 +1,9 @@
 <template>
-  <div class="result-card" :class="{ 'result-pass': result.success, 'result-fail': !result.success }">
+  <div class="result-card" :class="{ 'result-pass': result.success, 'result-fail': !result.success, 'result-critical': result.final_severity === 'CRITICAL' }">
     <!-- 头部 -->
     <div class="result-header">
       <div class="result-title">
+        <span v-if="runIndex" class="run-order-badge">Step {{ runIndex }}/{{ totalCount }}</span>
         <span class="result-icon">{{ result.success ? '&#10003;' : '&#10007;' }}</span>
         <span>{{ result.sample_title || '自定义数据' }}</span>
       </div>
@@ -79,6 +80,8 @@ import { ref } from 'vue'
 
 defineProps({
   result: { type: Object, required: true },
+  runIndex: { type: Number, default: null },
+  totalCount: { type: Number, default: null },
 })
 
 const expanded = ref(false)
@@ -91,6 +94,21 @@ const expanded = ref(false)
   border-radius: 12px;
   padding: 14px;
   margin-bottom: 10px;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+/* CRITICAL 级别 - 动态血红色闪烁背景 */
+.result-critical {
+  animation: bloodPulse 1.2s ease-in-out infinite;
+}
+@keyframes bloodPulse {
+  0%, 100% {
+    background: rgba(80, 0, 0, 0.3);
+    box-shadow: 0 0 8px rgba(200, 0, 0, 0.3);
+  }
+  50% {
+    background: rgba(180, 0, 0, 0.55);
+    box-shadow: 0 0 20px rgba(220, 20, 20, 0.6), 0 0 40px rgba(180, 0, 0, 0.3);
+  }
 }
 .result-pass {
   border-left: 3px solid #10b981;
@@ -113,6 +131,17 @@ const expanded = ref(false)
 }
 .result-pass .result-icon { color: #34d399; }
 .result-fail .result-icon { color: #f87171; }
+.run-order-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
 .result-badges {
   display: flex;
   gap: 6px;
