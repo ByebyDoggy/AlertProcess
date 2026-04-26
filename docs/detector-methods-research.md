@@ -569,6 +569,8 @@ class XxxProvider(ContextProvider):
 | DBXen (2026-03-11) | Burn-to-Earn 操纵 | Ethereum | ~$152K | [DBXen攻击分析](攻击事件分析驱动检测器开发/DBXEN/DBXen攻击分析-通用检测特征.md) |
 | BCE Token (2026-03-23) | 闪电贷 + 代币铸造漏洞 | BSC | ~$800K | [BCE攻击分析](攻击事件分析驱动检测器开发/BCE/BCE攻击分析-通用检测特征.md) |
 | USR/Resolv (2026-03-22) | 未授权铸造 + 协议逻辑漏洞 | Ethereum | ~$67.4M | [USR攻击分析](攻击事件分析驱动检测器开发/USR/USR攻击分析-通用检测特征.md) |
+| Cyrus Finance (2026-03-22) | 闪电贷 + 现货价格预言机操纵 | BSC | ~$524K | [Cyrus攻击分析](攻击事件分析驱动检测器开发/CyrusFinance/CyrusFinance攻击分析-通用检测特征.md) |
+| **Infini (2026-02-24)** | **私钥泄露 / 管理员权限滥用** | **Ethereum** | **~$49.5M** | **[Infini攻击分析](攻击事件分析驱动检测器开发/Infini/Infini攻击分析-通用检测特征.md)** |
 
 ### 10.2 分析驱动的检测器成果
 
@@ -579,8 +581,13 @@ class XxxProvider(ContextProvider):
 | `IndirectionLayerDetector` | DBXen | ✅ 已实现 |
 | `LiquidityImpactDetector` | BCE | 🔲 待开发 |
 | `FlashLoanTraceDetector` 增强 | BCE | 🔲 待开发 |
-| `EconomicAnomalyDetector` 增强（零投入+代理铸造） | USR | 🔲 待开发 |
+| `EconomicAnomalyDetector` 增强（零投入+代理铸造） | USR | ✅ 已实现 |
 | `FundDrainDetector` 增强（ERC-20净收益） | USR | 🔲 待开发 |
+| `EconomicAnomalyDetector` 增强（Swap-Reverse Pattern） | Cyrus | ✅ 已实现 |
+| `PriceManipulationDetector` (新建) | Cyrus | ✅ 已实现 |
+| `PrivilegedAddressMonitor` (待新建) | Infini | 🔲 待开发 |
+| `IndirectionLayerDetector` 增强（策略级联提取） | Infini | 🔲 待开发 |
+| `EconomicAnomalyDetector` 增强（策略份额销毁） | Infini | 🔲 待开发 |
 
 ---
 
