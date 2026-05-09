@@ -73,6 +73,18 @@ def _hex_to_int(val: Any) -> int:
     return 0
 
 
+def _read_uint256(data_hex: str, offset: int) -> str:
+    """从 data 字段读取 offset 位置开始的 32 字节 uint256，返回 hex 字符串"""
+    if not data_hex or not data_hex.startswith("0x"):
+        return "0x0"
+    # 去掉 0x 前缀
+    raw = data_hex[2:]
+    byte_offset = offset * 2  # 每个字节 2 个 hex 字符
+    if byte_offset + 64 > len(raw):
+        return "0x0"
+    return "0x" + raw[byte_offset:byte_offset + 64]
+
+
 def _extract_topic0(log: dict) -> str:
     """提取 log 的 topic0（事件签名）"""
     topics = log.get("topics", [])
@@ -124,13 +136,60 @@ class TransferEvent:
 
 class SwapEvent:
     """解析后的 DEX Swap 事件"""
-    __slots__ = ("log_index", "pool_address", "swap_type", "raw")
+    __slots__ = ("log_index", "pool_address", "swap_type", "raw",
+                 "amount0", "amount1", "sender", "recipient")
 
-    def __init__(self, log_index: int, pool_address: str, swap_type: str, raw: dict):
+    def __init__(self, log_index: int, pool_address: str, swap_type: str, raw: dict,
+                 amount0: int = 0, amount1: int = 0, sender: str = "", recipient: str = ""):
         self.log_index = log_index
         self.pool_address = pool_address.lower()
         self.swap_type = swap_type  # "uniswap_v2" | "uniswap_v3"
         self.raw = raw
+        self.amount0 = amount0      # V3: 正=出,负=入; V2: amount0In/amount0Out
+        self.amount1 = amount1      # V3: 正=出,负=入; V2: amount1In/amount1Out
+        self.sender = sender.lower()
+        self.recipient = recipient.lower()
+
+
+# ---------------------------------------------------------------------------
+# 适配器函数：将 primitives 数据转换为内部格式
+# ---------------------------------------------------------------------------
+
+def _convert_parsed_transfer_to_internal(parsed: dict) -> TransferEvent:
+    """将 primitives TransferEvent 转换为内部 TransferEvent"""
+    log_index = parsed.get("log_index", 0)
+    if isinstance(log_index, str) and log_index.startswith("0x"):
+        log_index = int(log_index, 16)
+
+    return TransferEvent(
+        log_index=log_index,
+        token_address=parsed.get("token_address", ""),
+        from_addr=parsed.get("from_address", ""),
+        to_addr=parsed.get("to_address", ""),
+        amount=parsed.get("amount", 0),
+        raw={},  # 原始 log 数据在 primitives 中已丢失，但检测逻辑不依赖 raw
+    )
+
+
+def _convert_parsed_swap_to_internal(parsed: dict) -> SwapEvent:
+    """将 primitives SwapEvent 转换为内部 SwapEvent"""
+    log_index = parsed.get("log_index", 0)
+    if isinstance(log_index, str) and log_index.startswith("0x"):
+        log_index = int(log_index, 16)
+
+    version = parsed.get("version", "v2")
+    swap_type = "uniswap_v2" if version == "v2" else "uniswap_v3"
+
+    return SwapEvent(
+        log_index=log_index,
+        pool_address=parsed.get("dex_address", ""),
+        swap_type=swap_type,
+        raw={},
+        amount0=parsed.get("amount_in", 0),
+        amount1=parsed.get("amount_out", 0),
+        sender="",  # primitives 不提供 sender/recipient
+        recipient="",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -175,21 +234,55 @@ def scan_logs(logs: list[dict]) -> tuple[list[TransferEvent], list[SwapEvent]]:
         # Uniswap V2 Swap
         elif topic0 == UNISWAP_V2_SWAP_TOPIC.lower():
             pool_address = (log.get("address") or "").lower()
+            data_hex = log.get("data", "0x")
+            amount0_in = _hex_to_int(_read_uint256(data_hex, 0))
+            amount1_in = _hex_to_int(_read_uint256(data_hex, 32))
+            amount0_out = _hex_to_int(_read_uint256(data_hex, 64))
+            amount1_out = _hex_to_int(_read_uint256(data_hex, 96))
+            topics_list = log.get("topics", [])
+            sender = _extract_address_from_topic(topics_list[1]) if len(topics_list) > 1 else ""
+            recipient = _extract_address_from_topic(topics_list[2]) if len(topics_list) > 2 else ""
+            # V2: 正数=出, 负数=入 (与V3一致)
+            a0 = amount0_out if amount0_out > 0 else -amount0_in
+            a1 = amount1_out if amount1_out > 0 else -amount1_in
             swaps.append(SwapEvent(
                 log_index=log_index,
                 pool_address=pool_address,
                 swap_type="uniswap_v2",
                 raw=log,
+                amount0=a0,
+                amount1=a1,
+                sender=sender,
+                recipient=recipient,
             ))
 
         # Uniswap V3 Swap
         elif topic0 == UNISWAP_V3_SWAP_TOPIC.lower():
             pool_address = (log.get("address") or "").lower()
+            data_hex = log.get("data", "0x")
+            # V3 Swap data: amount0(int256), amount1(int256), sqrtPriceX96, liquidity, tick
+            amount0_raw = _read_uint256(data_hex, 0)
+            amount1_raw = _read_uint256(data_hex, 32)
+            # V3: 正数=token出池, 负数=token入池
+            a0 = int(amount0_raw, 16) if amount0_raw else 0
+            a1 = int(amount1_raw, 16) if amount1_raw else 0
+            # 处理有符号整数 (V3 amount0/amount1 是 int256)
+            if a0 >= 2**255:
+                a0 -= 2**256
+            if a1 >= 2**255:
+                a1 -= 2**256
+            topics_list = log.get("topics", [])
+            sender = _extract_address_from_topic(topics_list[1]) if len(topics_list) > 1 else ""
+            recipient = _extract_address_from_topic(topics_list[2]) if len(topics_list) > 2 else ""
             swaps.append(SwapEvent(
                 log_index=log_index,
                 pool_address=pool_address,
                 swap_type="uniswap_v3",
                 raw=log,
+                amount0=a0,
+                amount1=a1,
+                sender=sender,
+                recipient=recipient,
             ))
 
     return transfers, swaps
@@ -750,6 +843,117 @@ def detect_proxy_mint_pattern(transfers: list[TransferEvent]) -> tuple[float, li
     return score, patterns
 
 
+def detect_swap_reverse_pattern(
+    swaps: list[SwapEvent],
+) -> tuple[float, list[dict]]:
+    """
+    特征 J: Swap-Reverse Pattern 检测 — 同池双向交换（Spot Price Manipulation）
+
+    检测同一交易中同一 DEX 池出现方向相反的成对 Swap：
+    - Swap A → B（amount0 正 amount1 负，或反之）
+    - Swap B → A（amount0 负 amount1 正，或反之）
+
+    这是现货价格预言机操纵的典型模式（如 Cyrus Finance 攻击）：
+    攻击者先通过大额 Swap 操纵池子价格，经过目标协议操作后，
+    再通过反向 Swap 恢复价格并提取利润。
+
+    返回:
+        (score, patterns)
+        score: 0.0~60.0
+        patterns: 每个检测到的 Swap-Reverse 对
+    """
+    if len(swaps) < 2:
+        return 0.0, []
+
+    # 按池地址分组
+    pool_swaps: dict[str, list[SwapEvent]] = {}
+    for s in swaps:
+        pool_swaps.setdefault(s.pool_address, []).append(s)
+
+    patterns: list[dict] = []
+
+    for pool, pool_events in pool_swaps.items():
+        if len(pool_events) < 2:
+            continue
+
+        # 对同一池中的所有 Swap 对进行两两检查
+        for i in range(len(pool_events)):
+            for j in range(i + 1, len(pool_events)):
+                a = pool_events[i]
+                b = pool_events[j]
+
+                # 检查两个 Swap 方向是否相反
+                # V3: amount0 > 0 表示 token0 出池, < 0 表示入池
+                # 方向相反: a.amount0 > 0 and b.amount0 < 0 and a.amount1 < 0 and b.amount1 > 0
+                #           或者 a.amount0 < 0 and b.amount0 > 0 and a.amount1 > 0 and b.amount1 < 0
+                a0_pos = a.amount0 > 0
+                a1_pos = a.amount1 > 0
+                b0_pos = b.amount0 > 0
+                b1_pos = b.amount1 > 0
+
+                # 方向相反: amount0 和 amount1 的符号同时相反
+                a0_neg = a.amount0 < 0
+                a1_neg = a.amount1 < 0
+                b0_neg = b.amount0 < 0
+                b1_neg = b.amount1 < 0
+
+                is_reverse = (a0_pos and a1_neg and b0_neg and b1_pos) or \
+                             (a0_neg and a1_pos and b0_pos and b1_neg)
+
+                if not is_reverse:
+                    continue
+
+                # 计算方向金额：正向金额（token0 out or token1 out）和反向金额
+                forward_amount = max(abs(a.amount0), abs(a.amount1))
+                reverse_amount = max(abs(b.amount0), abs(b.amount1))
+
+                # 两个 Swap 间是否有间隔（其他 log 在中间）
+                gap = abs(b.log_index - a.log_index) - 1
+
+                # 金额合理比例：反向至少是正向的 10%（太小的反向无意义）
+                min_reverse_ratio = 0.1
+                reverse_good = reverse_amount >= forward_amount * min_reverse_ratio
+
+                if not reverse_good:
+                    continue
+
+                patterns.append({
+                    "pool": pool,
+                    "swap_type": a.swap_type,
+                    "forward_log_index": a.log_index,
+                    "reverse_log_index": b.log_index,
+                    "forward_amount0": a.amount0,
+                    "forward_amount1": a.amount1,
+                    "reverse_amount0": b.amount0,
+                    "reverse_amount1": b.amount1,
+                    "gap_between": gap,
+                    "forward_abs": forward_amount,
+                    "reverse_abs": reverse_amount,
+                    "has_gap_operations": gap > 0,
+                })
+
+    if not patterns:
+        return 0.0, []
+
+    # 评分: 每个 Reverse 模式 +20，如果有 gap（中间有其他操作）额外加分
+    score = 0.0
+    for p in patterns:
+        base = 20.0
+        if p["has_gap_operations"]:
+            base += 10.0  # 中间有其他操作说明非单纯套利，可能是价格操纵
+        # 金额越大分数越高
+        forward_usd_est = p["forward_abs"] / 10**18  # 粗略 ETH 等价估值
+        if forward_usd_est > 1000:
+            base += 5.0
+        if forward_usd_est > 100_000:
+            base += 10.0
+        score += base
+
+    score = min(60.0, score)
+
+    return score, patterns
+
+
 # ---------------------------------------------------------------------------
 # EconomicAnomalyDetector
 # ---------------------------------------------------------------------------
@@ -757,6 +961,95 @@ def detect_proxy_mint_pattern(transfers: list[TransferEvent]) -> tuple[float, li
 class EconomicAnomalyOutput(DetectorOutputMixin):
     """经济异常检测器输出"""
     pass
+
+
+def detect_zero_cost_proxy_pattern(
+    zero_cost_details: dict[str, Any],
+    proxy_mint_patterns: list[dict],
+) -> tuple[float, list[dict]]:
+    """检测零投入收益与代理铸造模式的关联。"""
+    if not zero_cost_details.get("detected") or not proxy_mint_patterns:
+        return 0.0, []
+
+    gain_tokens = {
+        item.get("token", "").lower()
+        for item in zero_cost_details.get("gains", [])
+        if item.get("token")
+    }
+    if not gain_tokens:
+        return 0.0, []
+
+    patterns = [
+        {
+            "token": item["token"],
+            "proxy_minter": item["proxy_minter"],
+            "final_receivers": item.get("final_receivers", []),
+            "ratio": item.get("ratio", 0.0),
+        }
+        for item in proxy_mint_patterns
+        if item.get("token", "").lower() in gain_tokens
+    ]
+    if not patterns:
+        return 0.0, []
+
+    score = min(20.0, 12.0 + 4.0 * max(0, len(patterns) - 1))
+    return score, patterns
+
+
+def detect_zero_cost_high_ratio_mint(
+    zero_cost_details: dict[str, Any],
+    mint_transfer_patterns: list[dict],
+) -> tuple[float, list[dict]]:
+    """检测零投入收益与高比例铸造转出的闭环。"""
+    if not zero_cost_details.get("detected") or not mint_transfer_patterns:
+        return 0.0, []
+
+    gain_tokens = {
+        item.get("token", "").lower()
+        for item in zero_cost_details.get("gains", [])
+        if item.get("token")
+    }
+    if not gain_tokens:
+        return 0.0, []
+
+    patterns = [
+        {
+            "token": item["token"],
+            "mint_to": item["mint_to"],
+            "transfer_to": item["transfer_to"],
+            "ratio": item.get("ratio", 0.0),
+        }
+        for item in mint_transfer_patterns
+        if item.get("token", "").lower() in gain_tokens
+    ]
+    if not patterns:
+        return 0.0, []
+
+    score = min(18.0, 10.0 + 4.0 * max(0, len(patterns) - 1))
+    return score, patterns
+
+
+def detect_low_cost_high_roi_mint_loop(
+    roi_details: dict[str, Any],
+    mint_transfer_patterns: list[dict],
+    proxy_mint_patterns: list[dict],
+) -> tuple[float, dict[str, Any]]:
+    """检测低成本高 ROI 与铸造/代理转出的联合模式。"""
+    if not roi_details or roi_details.get("roi", 0) < 50:
+        return 0.0, {"detected": False}
+    if not mint_transfer_patterns and not proxy_mint_patterns:
+        return 0.0, {"detected": False}
+
+    score = 15.0
+    if mint_transfer_patterns and proxy_mint_patterns:
+        score = 22.0
+
+    return score, {
+        "detected": True,
+        "roi": roi_details.get("roi", 0),
+        "mint_transfer_count": len(mint_transfer_patterns),
+        "proxy_mint_count": len(proxy_mint_patterns),
+    }
 
 
 class EconomicAnomalyDetector(BaseDetector):
@@ -772,6 +1065,7 @@ class EconomicAnomalyDetector(BaseDetector):
       - 零投入+无闪电贷+代币净收益: 无资金投入却获得大量代币
       - 铸造后转出比例: 铸造代币被大比例转出 (>90%)
       - 代理铸造者模式: 代理合约铸造代币后转给第三方
+      - Swap-Reverse Pattern: 同池双向交换（现货价格操纵信号）
 
     所有检测仅依赖 ERC-20 Transfer 事件和 DEX Swap 事件，
     不依赖任何特定函数签名，天然具备跨协议通用性。
@@ -785,7 +1079,7 @@ class EconomicAnomalyDetector(BaseDetector):
         "检测经济套利类攻击：极高 ROI（投入产出比异常）、"
         "Token 销毁信号、铸造后立即转出、Swap-Burn-Claim 闭环、"
         "销毁触发大额资金释放、零投入+无闪电贷代币净收益、"
-        "铸造后转出比例异常、代理铸造者模式。"
+        "铸造后转出比例异常、代理铸造者模式、Swap-Reverse同池双向交换(价格操纵)。"
         "主要依赖标准 ERC-20/DEX 事件，"
         "辅助使用 eth_trace 提取内部 ETH 流出用于 ROI 计算，不依赖函数签名，具备跨协议通用性"
     )
@@ -911,11 +1205,26 @@ class EconomicAnomalyDetector(BaseDetector):
                 logs=["无logs数据且无内部ETH流出，跳过经济异常分析"],
             )
 
-        # ── 1. 扫描日志 ──
-        transfers, swaps = scan_logs(logs)
+        # ── 1. 扫描日志（优先使用 Provider 预解析数据，否则回退到 scan_logs） ──
+        parsed_transfers = self.get_parsed_transfers(tx_context)
+        parsed_swaps = self.get_parsed_swaps(tx_context)
 
-        # ── 2. 获取原生代币价格（通过 TokenPriceCache，含硬编码 fallback） ──
-        native_price = self.token_price_instance.get_price(chain_id, "") or 0.0
+        if parsed_transfers or parsed_swaps:
+            # 使用 Provider 预解析数据
+            transfers = [_convert_parsed_transfer_to_internal(t) for t in parsed_transfers]
+            swaps = [_convert_parsed_swap_to_internal(s) for s in parsed_swaps]
+        else:
+            # 回退到传统 scan_logs
+            transfers, swaps = scan_logs(logs)
+
+        # ── 2. 获取原生代币价格 ──
+        # 优先使用 TokenPriceProvider 注入的价格数据
+        token_prices = self.get_token_prices(tx_context)
+        native_price = token_prices.get("", 0.0)  # 空字符串 key 表示原生代币
+
+        # 如果 Provider 没有提供原生代币价格，回退到 token_price_instance
+        if native_price == 0.0:
+            native_price = self.token_price_instance.get_price(chain_id, "") or 0.0
 
         # ── 3. 执行各项检测 ──
         signals: list[str] = []
@@ -996,11 +1305,39 @@ class EconomicAnomalyDetector(BaseDetector):
             signals.append("PROXY_MINT_PATTERN")
             detection_data["proxy_mint_pattern"] = pm_details
 
+        # 特征 K: 零投入 + 代理铸造联动
+        zcpp_score, zcpp_details = detect_zero_cost_proxy_pattern(zctg_details, pm_details)
+        if zcpp_score > 0:
+            signals.append("ZERO_COST_PROXY_MINT_PATTERN")
+            detection_data["zero_cost_proxy_pattern"] = zcpp_details
+
+        # 特征 L: 零投入 + 高比例铸造转出
+        zchm_score, zchm_details = detect_zero_cost_high_ratio_mint(zctg_details, mtr_details)
+        if zchm_score > 0:
+            signals.append("ZERO_COST_HIGH_RATIO_MINT")
+            detection_data["zero_cost_high_ratio_mint"] = zchm_details
+
+        # 特征 M: 低成本高 ROI + 铸造/代理转出闭环
+        lhrm_score, lhrm_details = detect_low_cost_high_roi_mint_loop(
+            roi_details if roi_score > 0 else {},
+            mtr_details,
+            pm_details,
+        )
+        if lhrm_score > 0:
+            signals.append("LOW_COST_HIGH_ROI_MINT_LOOP")
+            detection_data["low_cost_high_roi_mint_loop"] = lhrm_details
+
+        # 特征 J: Swap-Reverse Pattern (同池双向交换, 价格操纵信号)
+        srp_score, srp_details = detect_swap_reverse_pattern(swaps)
+        if srp_score > 0:
+            signals.append("SWAP_REVERSE_PATTERN")
+            detection_data["swap_reverse_pattern"] = srp_details
+
         # ── 4. 组合评分 ──
         # 基础分 = 各特征分之和
-        total_score = roi_score + burn_score + btd_score + mtt_score + sbc_score + zctg_score + mtr_score + pm_score
+        total_score = roi_score + burn_score + btd_score + mtt_score + sbc_score + zctg_score + mtr_score + pm_score + zcpp_score + zchm_score + lhrm_score + srp_score
         scoring_logs: list[str] = []
-        scoring_logs.append(f"基础分合计={total_score:.1f}: roi={roi_score:.1f} + burn={burn_score:.1f} + burn_then_drain={btd_score:.1f} + mint_then_transfer={mtt_score:.1f} + swap_burn_claim_loop={sbc_score:.1f} + zero_cost_gain={zctg_score:.1f} + mint_transfer_ratio={mtr_score:.1f} + proxy_mint={pm_score:.1f}")
+        scoring_logs.append(f"基础分合计={total_score:.1f}: roi={roi_score:.1f} + burn={burn_score:.1f} + burn_then_drain={btd_score:.1f} + mint_then_transfer={mtt_score:.1f} + swap_burn_claim_loop={sbc_score:.1f} + zero_cost_gain={zctg_score:.1f} + mint_transfer_ratio={mtr_score:.1f} + proxy_mint={pm_score:.1f} + zero_cost_proxy={zcpp_score:.1f} + zero_cost_high_ratio_mint={zchm_score:.1f} + low_cost_high_roi_mint_loop={lhrm_score:.1f} + swap_reverse={srp_score:.1f}")
 
         # 组合加分: 关键特征联动
         combo_bonus = 0.0
@@ -1012,6 +1349,10 @@ class EconomicAnomalyDetector(BaseDetector):
         has_zctg = zctg_details.get("detected", False)
         has_mtr = mtr_score > 0
         has_pm = pm_score > 0
+        has_srp = srp_score > 0
+        has_zcpp = zcpp_score > 0
+        has_zchm = zchm_score > 0
+        has_lhrm = lhrm_score > 0
 
         # ROI + 闭环 → 强攻击信号
         if has_roi and has_loop:
@@ -1055,6 +1396,36 @@ class EconomicAnomalyDetector(BaseDetector):
             signals.append("MINT_CASHOUT_LOOP")
             scoring_logs.append("组合加分+12: 铸造后高转出比例 + 代理铸造者(铸造后套现闭环)")
 
+        # 零投入 + 高比例铸造转出 + 代理铸造 → 更强未授权铸造闭环
+        if has_zcpp and has_zchm:
+            combo_bonus += 12.0
+            signals.append("ZERO_COST_MINT_DRAIN_LOOP")
+            scoring_logs.append("组合加分+12: 零投入代理铸造联动 + 零投入高比例铸造转出")
+
+        # 低成本高 ROI + 铸造/代理转出 → 业务逻辑异常套利闭环
+        if has_lhrm:
+            combo_bonus += 10.0
+            signals.append("LOW_COST_HIGH_ROI_EXTRACTION")
+            scoring_logs.append("组合加分+10: 低成本高ROI + 铸造/代理转出闭环")
+
+        # Swap-Reverse + ROI → 价格操纵攻击（典型现货预言机操纵模式）
+        if has_srp and has_roi:
+            combo_bonus += 20.0
+            signals.append("SWAP_REVERSE_PLUS_ROI")
+            scoring_logs.append("组合加分+20: Swap-Reverse同池双向交换 + ROI异常(现货价格预言机操纵)")
+
+        # Swap-Reverse + 零投入 → 闪电贷价格操纵（无成本但有双向Swap）
+        if has_srp and has_zctg:
+            combo_bonus += 15.0
+            signals.append("SWAP_REVERSE_ZERO_COST")
+            scoring_logs.append("组合加分+15: Swap-Reverse + 零投入净收益(闪电贷价格操纵)")
+
+        # Swap-Reverse + Swap-Burn-Claim → 复杂攻击模式
+        if has_srp and has_loop:
+            combo_bonus += 10.0
+            signals.append("SWAP_REVERSE_PLUS_LOOP")
+            scoring_logs.append("组合加分+10: Swap-Reverse + Swap-Burn-Claim闭环(复杂攻击)")
+
         # 全部命中 → 几乎确定攻击
         if has_roi and has_loop and has_burn:
             combo_bonus += 10.0
@@ -1097,6 +1468,17 @@ class EconomicAnomalyDetector(BaseDetector):
             scoring_logs.append(f"铸造后转出比例异常: 检测到{len(detection_data.get('mint_transfer_ratio', []))}个高转出比例模式(>90%)")
         if pm_score > 0:
             scoring_logs.append(f"代理铸造者模式: 检测到{len(detection_data.get('proxy_mint_pattern', []))}个代理铸造后转出模式")
+        if zcpp_score > 0:
+            scoring_logs.append(f"零投入代理铸造联动: 检测到{len(detection_data.get('zero_cost_proxy_pattern', []))}个收益代币与代理铸造重合模式")
+        if zchm_score > 0:
+            scoring_logs.append(f"零投入高比例铸造转出: 检测到{len(detection_data.get('zero_cost_high_ratio_mint', []))}个收益代币与高比例转出重合模式")
+        if lhrm_score > 0:
+            lhrm = detection_data.get('low_cost_high_roi_mint_loop', {})
+            scoring_logs.append(f"低成本高ROI铸造闭环: roi={lhrm.get('roi', 0):.1f}x, mint_transfer_count={lhrm.get('mint_transfer_count', 0)}, proxy_mint_count={lhrm.get('proxy_mint_count', 0)}")
+
+        if srp_score > 0:
+            srp_detail = detection_data.get("swap_reverse_pattern", [])
+            scoring_logs.append(f"Swap-Reverse同池双向交换: 检测到{len(srp_detail)}个反向交换对, 中间有操作={any(p.get('has_gap_operations') for p in srp_detail)}")
 
         scoring_logs.append(f"最终评分={total_score:.1f}, 阈值={threshold}, passed={passed}, severity={score_to_severity(total_score)}")
 
@@ -1111,6 +1493,10 @@ class EconomicAnomalyDetector(BaseDetector):
             "zero_cost_token_gain": round(zctg_score, 2),
             "mint_transfer_ratio": round(mtr_score, 2),
             "proxy_mint_pattern": round(pm_score, 2),
+            "zero_cost_proxy_pattern": round(zcpp_score, 2),
+            "zero_cost_high_ratio_mint": round(zchm_score, 2),
+            "low_cost_high_roi_mint_loop": round(lhrm_score, 2),
+            "swap_reverse_pattern": round(srp_score, 2),
         }
         detection_data["signals"] = signals
         detection_data["transfer_count"] = len(transfers)
