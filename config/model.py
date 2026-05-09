@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     ingest_enabled: bool = True
     ingest_max_batch_size: int = 5000       # 单次推送最大日志数
 
+    # ── OpenAI 兼容 AI 配置（规则链 AI 生成 / MCP 工具） ──
+    ai_enabled: bool = False
+    ai_base_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_model: str = "gpt-4.1-mini"
+    ai_timeout_seconds: int = 60
+    ai_temperature: float = 0.2
+    ai_max_tokens: int = 4096
+
 
     class Config:
         env_file = None if os.environ.get('DOCKER_ENV') == 'true' else ".env"

@@ -13,3 +13,10 @@ export async function fetchNodeTypes() {
 export async function fetchConnectionRules() {
   return apiService.request('/rule-chain/schema/connection-rules')
 }
+
+/**
+ * 加载节点文档数据（含 required_providers / provides / config_schema_raw 等）
+ */
+export async function fetchNodeDocs() {
+  return apiService.request('/rule-chain/schema/nodes-docs')
+}

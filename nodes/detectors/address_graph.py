@@ -47,7 +47,7 @@ class AddressGraphDetector(BaseDetector):
         threshold: float = Field(default=40.0, ge=0, le=100, description="passed 阈值")
         centralization_threshold: int = Field(default=5, ge=0, description="中心化阈值（关联交易所数）")
 
-    description: str = "基于已知地址数据库分析交易双方关系：与已知攻击者地址交互给 95 分、交易所地址交互 40 分。用于追踪资金流向和识别洗钱路径"
+    description: str = "[数据需求: 仅交易基础字段] 基于已知地址数据库分析交易双方关系：与已知攻击者地址交互给 95 分、交易所地址交互 40 分。用于追踪资金流向和识别洗钱路径"
     icon: str = "\U0001f517"
     color: str = "#6366f1"
 

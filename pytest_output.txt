@@ -1,0 +1,407 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.0, pytest-9.0.2, pluggy-1.6.0
+rootdir: d:\Programming\Python\AlertProcessor
+configfile: pytest.ini
+plugins: anyio-4.13.0, asyncio-1.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 62 items
+
+tests\nodes\test_detectors\test_address_age.py .........F....FFFFFF      [ 32%]
+tests\nodes\test_detectors\test_token_approval.py FFFFFFFFF..            [ 50%]
+tests\nodes\test_eth_trace_provider.py ......F                           [ 61%]
+tests\nodes\test_output_fields.py ...F.F...FF..F                         [ 83%]
+tests\test_balance_price_calc.py ....FFFF..                              [100%]
+
+================================== FAILURES ===================================
+___________ TestAddressAgeDetector.test_backtest_with_tx_timestamp ____________
+tests\nodes\test_detectors\test_address_age.py:120: in test_backtest_with_tx_timestamp
+    assert output.score == 70  # 5 < 7 → NEW_ADDRESS
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: assert 10.0 == 70
+E    +  where 10.0 = NodeOutput(node_id='d1', node_type='detection', score=10.0, passed=False, context={'chain_id': 1, 'tx_hash': '', 'bloc...severity='UNKNOWN', logs=[], timestamp=datetime.datetime(2026, 5, 5, 13, 27, 22, 712224, tzinfo=datetime.timezone.utc)).score
+_________________ TestEstimateAgeByBlocks.test_basic_estimate _________________
+tests\nodes\test_detectors\test_address_age.py:164: in test_basic_estimate
+    result = _estimate_age_by_blocks(ctx)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+________________ TestEstimateAgeByBlocks.test_ethereum_30_days ________________
+tests\nodes\test_detectors\test_address_age.py:172: in test_ethereum_30_days
+    result = _estimate_age_by_blocks(ctx)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+______________ TestEstimateAgeByBlocks.test_missing_first_block _______________
+tests\nodes\test_detectors\test_address_age.py:178: in test_missing_first_block
+    assert _estimate_age_by_blocks({"block_number": 100}) is None
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+_____________ TestEstimateAgeByBlocks.test_missing_current_block ______________
+tests\nodes\test_detectors\test_address_age.py:181: in test_missing_current_block
+    assert _estimate_age_by_blocks({"first_block_number": 100}) is None
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+_________________ TestEstimateAgeByBlocks.test_invalid_chain __________________
+tests\nodes\test_detectors\test_address_age.py:186: in test_invalid_chain
+    result = _estimate_age_by_blocks(ctx)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+_________________ TestEstimateAgeByBlocks.test_reverse_order __________________
+tests\nodes\test_detectors\test_address_age.py:192: in test_reverse_order
+    assert _estimate_age_by_blocks(ctx) is None
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\address_age.py:52: in _estimate_age_by_blocks
+    first_block_raw = tx_context.extra.get("first_block_number")
+                      ^^^^^^^^^^^^^^^^
+E   AttributeError: 'dict' object has no attribute 'extra'
+______________ TestTokenApprovalDetector.test_infinite_approval _______________
+tests\nodes\test_detectors\test_token_approval.py:39: in test_infinite_approval
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+__________ TestTokenApprovalDetector.test_approval_to_known_protocol __________
+tests\nodes\test_detectors\test_token_approval.py:49: in test_approval_to_known_protocol
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+_____________ TestTokenApprovalDetector.test_approval_to_unknown ______________
+tests\nodes\test_detectors\test_token_approval.py:58: in test_approval_to_unknown
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+________ TestTokenApprovalDetector.test_set_approval_for_all_approved _________
+tests\nodes\test_detectors\test_token_approval.py:68: in test_set_approval_for_all_approved
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+__________ TestTokenApprovalDetector.test_set_approval_for_all_known __________
+tests\nodes\test_detectors\test_token_approval.py:78: in test_set_approval_for_all_known
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+_________ TestTokenApprovalDetector.test_set_approval_for_all_revoke __________
+tests\nodes\test_detectors\test_token_approval.py:87: in test_set_approval_for_all_revoke
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+___________ TestTokenApprovalDetector.test_not_approval_transaction ___________
+tests\nodes\test_detectors\test_token_approval.py:95: in test_not_approval_transaction
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+_______________ TestTokenApprovalDetector.test_empty_input_data _______________
+tests\nodes\test_detectors\test_token_approval.py:103: in test_empty_input_data
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+______ TestTokenApprovalDetector.test_check_approval_to_unknown_disabled ______
+tests\nodes\test_detectors\test_token_approval.py:112: in test_check_approval_to_unknown_disabled
+    output = await det.execute(ctx, _make_inputs(ctx))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\base.py:120: in execute
+    output = await self.process(tx_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+nodes\detectors\token_approval.py:85: in process
+    context = input.context
+              ^^^^^^^^^^^^^
+.venv\Lib\site-packages\pydantic\main.py:1026: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TransactionContext' object has no attribute 'context'
+_____________ TestEthTraceProviderNode.test_fetch_with_real_trace _____________
+tests\nodes\test_eth_trace_provider.py:137: in test_fetch_with_real_trace
+    assert et["trace_count"] > 0
+E   assert 0 > 0
+------------------------------ Captured log call ------------------------------
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    asyncio:base_events.py:1875 Future exception was never retrieved
+future: <Future finished exception=RuntimeError('[RPC-v4] No pool managers initialized. Check your configuration.')>
+Traceback (most recent call last):
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 299, in get_transaction_trace
+    result = await self.call(chain_id, "trace_transaction", [tx_hash])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 263, in call
+    await self.ensure_loaded()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 106, in ensure_loaded
+    await self.reload_config()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 169, in reload_config
+    raise RuntimeError("[RPC-v4] No pool managers initialized. Check your configuration.")
+RuntimeError: [RPC-v4] No pool managers initialized. Check your configuration.
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    asyncio:base_events.py:1875 Future exception was never retrieved
+future: <Future finished exception=RuntimeError('[RPC-v4] No pool managers initialized. Check your configuration.')>
+Traceback (most recent call last):
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 299, in get_transaction_trace
+    result = await self.call(chain_id, "trace_transaction", [tx_hash])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 263, in call
+    await self.ensure_loaded()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 106, in ensure_loaded
+    await self.reload_config()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 169, in reload_config
+    raise RuntimeError("[RPC-v4] No pool managers initialized. Check your configuration.")
+RuntimeError: [RPC-v4] No pool managers initialized. Check your configuration.
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    asyncio:base_events.py:1875 Future exception was never retrieved
+future: <Future finished exception=RuntimeError('[RPC-v4] No pool managers initialized. Check your configuration.')>
+Traceback (most recent call last):
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 299, in get_transaction_trace
+    result = await self.call(chain_id, "trace_transaction", [tx_hash])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 263, in call
+    await self.ensure_loaded()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 106, in ensure_loaded
+    await self.reload_config()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 169, in reload_config
+    raise RuntimeError("[RPC-v4] No pool managers initialized. Check your configuration.")
+RuntimeError: [RPC-v4] No pool managers initialized. Check your configuration.
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    asyncio:base_events.py:1875 Future exception was never retrieved
+future: <Future finished exception=RuntimeError('[RPC-v4] No pool managers initialized. Check your configuration.')>
+Traceback (most recent call last):
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 343, in get_transaction_trace
+    result = await self.call(
+             ^^^^^^^^^^^^^^^^
+        chain_id, "debug_traceTransaction", [tx_hash, tracer_config]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 263, in call
+    await self.ensure_loaded()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 106, in ensure_loaded
+    await self.reload_config()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 169, in reload_config
+    raise RuntimeError("[RPC-v4] No pool managers initialized. Check your configuration.")
+RuntimeError: [RPC-v4] No pool managers initialized. Check your configuration.
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    asyncio:base_events.py:1875 Future exception was never retrieved
+future: <Future finished exception=RuntimeError('[RPC-v4] No pool managers initialized. Check your configuration.')>
+Traceback (most recent call last):
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 343, in get_transaction_trace
+    result = await self.call(
+             ^^^^^^^^^^^^^^^^
+        chain_id, "debug_traceTransaction", [tx_hash, tracer_config]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 263, in call
+    await self.ensure_loaded()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 106, in ensure_loaded
+    await self.reload_config()
+  File "d:\Programming\Python\AlertProcessor\detectors\trace\provider.py", line 169, in reload_config
+    raise RuntimeError("[RPC-v4] No pool managers initialized. Check your configuration.")
+RuntimeError: [RPC-v4] No pool managers initialized. Check your configuration.
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=1 pool=ethereum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=56 pool=bsc-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=137 pool=polygon-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=42161 pool=arbitrum-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=10 pool=optimism-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+ERROR    detectors.trace.provider:provider.py:163 [RPC-v4] Failed to connect chain=43114 pool=avalanche-rpc: Server error '502 Bad Gateway' for url 'http://localhost:8005/api/v1/auth/login'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502
+WARNING  detectors.trace.provider:provider.py:381 [TRACE] No tracing support available for tx 0x914a5af790e55b... on chain 1 after trying 3 nodes per method. Last error: [RPC-v4] No pool managers initialized. Check your configuration.
+_____ TestDetectorOutputModels.test_flash_loan_detector_has_output_model ______
+tests\nodes\test_output_fields.py:81: in test_flash_loan_detector_has_output_model
+    assert "score" in props
+E   AssertionError: assert 'score' in {'block_number': {'default': 0, 'description': '交易所在区块号', 'title': 'Block Number', 'type': 'integer'}, 'chain_id': {'d...t'}, 'from_address': {'default': '', 'description': '交易发起者 (from) 地址', 'title': 'From Address', 'type': 'string'}, ...}
+_____ TestDetectorOutputModels.test_address_age_detector_has_output_model _____
+tests\nodes\test_output_fields.py:102: in test_address_age_detector_has_output_model
+    assert "detection" in schema["properties"]
+E   AssertionError: assert 'detection' in {'block_number': {'default': 0, 'description': '交易所在区块号', 'title': 'Block Number', 'type': 'integer'}, 'chain_id': {'d...t'}, 'from_address': {'default': '', 'description': '交易发起者 (from) 地址', 'title': 'From Address', 'type': 'string'}, ...}
+_________ TestMemoryOutputModel.test_context_memory_has_output_model __________
+tests\nodes\test_output_fields.py:145: in test_context_memory_has_output_model
+    assert cls is not None
+E   assert None is not None
+________ TestInputSchemaGeneration.test_base_detector_has_input_model _________
+tests\nodes\test_output_fields.py:160: in test_base_detector_has_input_model
+    assert "context" in schema["properties"]
+E   AssertionError: assert 'context' in {'block_number': {'default': 0, 'description': '交易所在区块号', 'title': 'Block Number', 'type': 'integer'}, 'chain_id': {'d...t'}, 'from_address': {'default': '', 'description': '交易发起者 (from) 地址', 'title': 'From Address', 'type': 'string'}, ...}
+_____ TestOutputModelInheritance.test_detector_output_model_extends_base ______
+tests\nodes\test_output_fields.py:189: in test_detector_output_model_extends_base
+    assert "score" in schema["properties"]
+E   AssertionError: assert 'score' in {'block_number': {'default': 0, 'description': '交易所在区块号', 'title': 'Block Number', 'type': 'integer'}, 'chain_id': {'d...t'}, 'from_address': {'default': '', 'description': '交易发起者 (from) 地址', 'title': 'From Address', 'type': 'string'}, ...}
+_ TestComputeBalanceChangesPriceCalculation.test_eth_price_calculation_in_balance _
+tests\test_balance_price_calc.py:135: in test_eth_price_calculation_in_balance
+    assert sender_eth.price_usd == 3500.0
+E   AssertionError: assert 2000.0 == 3500.0
+E    +  where 2000.0 = BalanceChangeItem(address='0xsender', address_label='0xsender', token_address='', token_symbol='ETH', decimals=18, amount_raw=-1000000000000000000, amount_formatted='-1.0000', value_usd=-2000.0, price_usd=2000.0, logo_url=None).price_usd
+__ TestComputeBalanceChangesPriceCalculation.test_erc20_price_with_decimals ___
+tests\test_balance_price_calc.py:189: in test_erc20_price_with_decimals
+    assert item.value_usd == 15.0, f"Expected 15.0, got {item.value_usd}"
+E   AssertionError: Expected 15.0, got 0.0
+E   assert 0.0 == 15.0
+E    +  where 0.0 = BalanceChangeItem(address='0x1234567890abcdef1234567890abcdef12345678', address_label='0x1234567890...', token_address...mbol='USDT', decimals=18, amount_raw=15000000, amount_formatted='0.0000', value_usd=0.0, price_usd=None, logo_url=None).value_usd
+___ TestComputeBalanceChangesPriceCalculation.test_native_price_from_cache ____
+tests\test_balance_price_calc.py:223: in test_native_price_from_cache
+    assert item.value_usd == 7000.0, f"Expected 7000.0, got {item.value_usd}"
+E   AssertionError: Expected 7000.0, got 4000.0
+E   assert 4000.0 == 7000.0
+E    +  where 4000.0 = BalanceChangeItem(address='0xreceiver', address_label='0xreceiver', token_address='', token_symbol='ETH', decimals=18, amount_raw=2000000000000000000, amount_formatted='+2.0000', value_usd=4000.0, price_usd=2000.0, logo_url=None).value_usd
+__ TestComputeBalanceChangesPriceCalculation.test_no_price_returns_zero_usd ___
+tests\test_balance_price_calc.py:259: in test_no_price_returns_zero_usd
+    assert item.value_usd == 0.0
+E   AssertionError: assert 2000.0 == 0.0
+E    +  where 2000.0 = BalanceChangeItem(address='0xreceiver', address_label='0xreceiver', token_address='', token_symbol='ETH', decimals=18, amount_raw=1000000000000000000, amount_formatted='+1.0000', value_usd=2000.0, price_usd=2000.0, logo_url=None).value_usd
+=========================== short test summary info ===========================
+FAILED tests/nodes/test_detectors/test_address_age.py::TestAddressAgeDetector::test_backtest_with_tx_timestamp
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_basic_estimate
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_ethereum_30_days
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_missing_first_block
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_missing_current_block
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_invalid_chain
+FAILED tests/nodes/test_detectors/test_address_age.py::TestEstimateAgeByBlocks::test_reverse_order
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_infinite_approval
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_approval_to_known_protocol
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_approval_to_unknown
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_set_approval_for_all_approved
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_set_approval_for_all_known
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_set_approval_for_all_revoke
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_not_approval_transaction
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_empty_input_data
+FAILED tests/nodes/test_detectors/test_token_approval.py::TestTokenApprovalDetector::test_check_approval_to_unknown_disabled
+FAILED tests/nodes/test_eth_trace_provider.py::TestEthTraceProviderNode::test_fetch_with_real_trace
+FAILED tests/nodes/test_output_fields.py::TestDetectorOutputModels::test_flash_loan_detector_has_output_model
+FAILED tests/nodes/test_output_fields.py::TestDetectorOutputModels::test_address_age_detector_has_output_model
+FAILED tests/nodes/test_output_fields.py::TestMemoryOutputModel::test_context_memory_has_output_model
+FAILED tests/nodes/test_output_fields.py::TestInputSchemaGeneration::test_base_detector_has_input_model
+FAILED tests/nodes/test_output_fields.py::TestOutputModelInheritance::test_detector_output_model_extends_base
+FAILED tests/test_balance_price_calc.py::TestComputeBalanceChangesPriceCalculation::test_eth_price_calculation_in_balance
+FAILED tests/test_balance_price_calc.py::TestComputeBalanceChangesPriceCalculation::test_erc20_price_with_decimals
+FAILED tests/test_balance_price_calc.py::TestComputeBalanceChangesPriceCalculation::test_native_price_from_cache
+FAILED tests/test_balance_price_calc.py::TestComputeBalanceChangesPriceCalculation::test_no_price_returns_zero_usd
+================== 26 failed, 36 passed in 89.01s (0:01:29) ===================

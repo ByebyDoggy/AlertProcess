@@ -4,6 +4,9 @@
   - detect_zero_cost_token_gain: 零投入+无闪电贷+代币净收益
   - detect_mint_transfer_ratio: 铸造后转出比例
   - detect_proxy_mint_pattern: 代理铸造者模式
+
+测试 Cyrus Finance 攻击驱动的检测:
+  - detect_swap_reverse_pattern: 同池双向交换（价格操纵信号）
 """
 
 import pytest
@@ -13,9 +16,16 @@ from nodes.detectors.economic_anomaly import (
     detect_zero_cost_token_gain,
     detect_mint_transfer_ratio,
     detect_proxy_mint_pattern,
+    detect_zero_cost_proxy_pattern,
+    detect_zero_cost_high_ratio_mint,
+    detect_low_cost_high_roi_mint_loop,
+    detect_swap_reverse_pattern,
     TransferEvent,
+    SwapEvent,
     scan_logs,
     ERC20_TRANSFER_TOPIC,
+    UNISWAP_V2_SWAP_TOPIC,
+    UNISWAP_V3_SWAP_TOPIC,
     ZERO_ADDRESS,
 )
 
@@ -325,6 +335,288 @@ class TestScanLogsWithNewFeatures:
 
 
 # ---------------------------------------------------------------------------
+# Swap 日志构造辅助函数
+# ---------------------------------------------------------------------------
+
+
+POOL_ADDR = "0x9f599f3d64a9d99ea21e68127bb6ce99f893da61"
+
+
+def _make_v3_swap_log(
+    amount0: int, amount1: int,
+    sender: str = ATTACKER,
+    recipient: str = ATTACKER,
+    pool: str = POOL_ADDR,
+    log_index: int = 0,
+    sqrt_price_x96: int = 0,
+) -> dict:
+    """构造 Uniswap V3 Swap 日志。
+    amount0/amount1 使用补码表示有符号 int256。
+    """
+    pad = lambda a: "0x" + a.lower().replace("0x", "").zfill(64)
+    # 将有符号整数编码为 uint256 补码
+    def to_int256(val: int) -> str:
+        if val < 0:
+            val = val + 2**256
+        return hex(val)
+
+    liquidity = 0
+    tick = 0
+    data = (to_int256(amount0)[2:].zfill(64) +
+            to_int256(amount1)[2:].zfill(64) +
+            hex(sqrt_price_x96)[2:].zfill(64) +
+            hex(liquidity)[2:].zfill(64) +
+            hex(tick)[2:].zfill(12))
+    return {
+        "address": pool,
+        "topics": [UNISWAP_V3_SWAP_TOPIC, pad(sender), pad(recipient)],
+        "data": "0x" + data,
+        "logIndex": log_index,
+    }
+
+
+def _make_v2_swap_log(
+    amount0_in: int, amount1_in: int,
+    amount0_out: int, amount1_out: int,
+    sender: str = ATTACKER,
+    recipient: str = ATTACKER,
+    pool: str = POOL_ADDR,
+    log_index: int = 0,
+) -> dict:
+    """构造 Uniswap V2 Swap 日志"""
+    pad = lambda a: "0x" + a.lower().replace("0x", "").zfill(64)
+    data = (hex(amount0_in)[2:].zfill(64) +
+            hex(amount1_in)[2:].zfill(64) +
+            hex(amount0_out)[2:].zfill(64) +
+            hex(amount1_out)[2:].zfill(64))
+    return {
+        "address": pool,
+        "topics": [UNISWAP_V2_SWAP_TOPIC, pad(sender), pad(recipient)],
+        "data": "0x" + data,
+        "logIndex": log_index,
+    }
+
+
+# ---------------------------------------------------------------------------
+# detect_swap_reverse_pattern 测试
+# ---------------------------------------------------------------------------
+
+class TestDetectSwapReversePattern:
+
+    def test_v3_same_pool_reverse_swap(self):
+        """V3 同一池双向交换: A→B then B→A"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=1000, amount1=-500),   # token0出, token1入
+            SwapEvent(log_index=11, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=-800, amount1=400),    # token0入, token1出（反向, 紧邻）
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score > 0
+        assert len(patterns) == 1
+        assert patterns[0]["pool"] == POOL_ADDR
+        assert patterns[0]["has_gap_operations"] is False  # 紧邻无 gap
+
+    def test_v3_same_direction_no_detection(self):
+        """V3 同一池同向交换不应检测"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=1000, amount1=-500),
+            SwapEvent(log_index=20, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=500, amount1=-250),  # 同方向
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score == 0.0
+        assert len(patterns) == 0
+
+    def test_v3_reverse_with_gap_and_large_amount(self):
+        """Cyrus 攻击模式: 双向 Swap 中间有其他操作"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=1_798 * 10**18, amount1=-1_212_462 * 10**6),  # 1,798 ETH → USDT
+            SwapEvent(log_index=30, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=-537 * 10**18, amount1=760_000 * 10**6),      # USDT → ETH (反向)
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score > 0
+        assert len(patterns) == 1
+        assert patterns[0]["gap_between"] == 19  # 30 - 10 - 1
+        assert patterns[0]["has_gap_operations"] is True  # 中间有其他操作
+        assert patterns[0]["forward_abs"] >= 1_798 * 10**18  # 大额
+
+    def test_v2_reverse_swap(self):
+        """V2 同一池双向交换"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address=POOL_ADDR, swap_type="uniswap_v2",
+                      raw={}, amount0=500, amount1=-1000),   # token0出500, token1入1000
+            SwapEvent(log_index=20, pool_address=POOL_ADDR, swap_type="uniswap_v2",
+                      raw={}, amount0=-400, amount1=800),    # 反向: token0入400, token1出800
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score > 0
+        assert len(patterns) == 1
+
+    def test_diff_pool_no_detection(self):
+        """不同池之间的 Swap 不应检测（不同token对）"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address="0xpool1", swap_type="uniswap_v3",
+                      raw={}, amount0=1000, amount1=-500),
+            SwapEvent(log_index=20, pool_address="0xpool2", swap_type="uniswap_v3",
+                      raw={}, amount0=-800, amount1=400),
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score == 0.0
+
+    def test_single_swap_no_detection(self):
+        """单笔 Swap 不应触发"""
+        swaps = [
+            SwapEvent(log_index=10, pool_address=POOL_ADDR, swap_type="uniswap_v3",
+                      raw={}, amount0=1000, amount1=-500),
+        ]
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score == 0.0
+
+    def test_empty_swaps_no_detection(self):
+        """空列表不应触发"""
+        score, patterns = detect_swap_reverse_pattern([])
+        assert score == 0.0
+
+    def test_scan_logs_v3_reverse_pattern(self):
+        """通过 scan_logs 解析 V3 Swap 后进行反向检测"""
+        # 模拟 Cyrus 攻击的两个 V3 Swap
+        logs = [
+            _make_v3_swap_log(
+                amount0=1_798 * 10**18, amount1=-1_212_462 * 10**6,
+                log_index=10,
+            ),
+            _make_v3_swap_log(
+                amount0=-537 * 10**18, amount1=760_000 * 10**6,
+                log_index=30,
+            ),
+        ]
+        transfers, swaps = scan_logs(logs)
+        assert len(swaps) == 2
+        assert swaps[0].amount0 > 0
+        assert swaps[0].amount1 < 0
+        assert swaps[1].amount0 < 0
+        assert swaps[1].amount1 > 0
+
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score > 0
+        assert len(patterns) == 1
+
+    def test_scan_logs_v2_reverse_pattern(self):
+        """通过 scan_logs 解析 V2 Swap 后进行反向检测"""
+        logs = [
+            _make_v2_swap_log(
+                amount0_in=0, amount1_in=1000, amount0_out=500, amount1_out=0,
+                log_index=10,
+            ),
+            _make_v2_swap_log(
+                amount0_in=400, amount1_in=0, amount0_out=0, amount1_out=800,
+                log_index=20,
+            ),
+        ]
+        transfers, swaps = scan_logs(logs)
+        assert len(swaps) == 2
+        assert swaps[0].amount0 > 0  # 500 out
+        assert swaps[1].amount0 < 0  # 400 in
+
+        score, patterns = detect_swap_reverse_pattern(swaps)
+        assert score > 0
+        assert len(patterns) == 1
+
+
+class TestP1EconomicAnomalyCorrelations:
+
+    def _mock_price_cache(self):
+        class MockPriceCache:
+            def get_price(self, chain_id, token):
+                token = token.lower()
+                if token == "":
+                    return 2000.0
+                if token == USR_TOKEN.lower():
+                    return 1.0
+                if token == USDC_TOKEN.lower():
+                    return 1.0
+                return None
+
+            def get(self, chain_id, token):
+                class Meta:
+                    decimals = 18 if token.lower() == USR_TOKEN.lower() else 6
+                return Meta()
+
+        return MockPriceCache()
+
+    def test_zero_cost_proxy_pattern_detected(self):
+        zero_cost_details = {
+            "detected": True,
+            "gains": [{"token": USR_TOKEN.lower(), "gain_usd": 49_950_000.0}],
+        }
+        proxy_patterns = [{
+            "token": USR_TOKEN.lower(),
+            "proxy_minter": THECOUNTER.lower(),
+            "final_receivers": [{"to": ATTACKER.lower(), "amount": 49_950_000}],
+            "ratio": 0.999,
+        }]
+        score, details = detect_zero_cost_proxy_pattern(zero_cost_details, proxy_patterns)
+        assert score > 0
+        assert len(details) == 1
+        assert details[0]["proxy_minter"] == THECOUNTER.lower()
+
+    def test_zero_cost_high_ratio_mint_detected(self):
+        zero_cost_details = {
+            "detected": True,
+            "gains": [{"token": USR_TOKEN.lower(), "gain_usd": 49_950_000.0}],
+        }
+        mint_patterns = [{
+            "token": USR_TOKEN.lower(),
+            "mint_to": THECOUNTER.lower(),
+            "transfer_to": ATTACKER.lower(),
+            "ratio": 0.999,
+        }]
+        score, details = detect_zero_cost_high_ratio_mint(zero_cost_details, mint_patterns)
+        assert score > 0
+        assert len(details) == 1
+        assert details[0]["transfer_to"] == ATTACKER.lower()
+
+    def test_low_cost_high_roi_mint_loop_detected(self):
+        roi_details = {"roi": 120.0}
+        mint_patterns = [{"token": USR_TOKEN.lower(), "ratio": 0.999}]
+        proxy_patterns = [{"token": USR_TOKEN.lower(), "proxy_minter": THECOUNTER.lower()}]
+        score, details = detect_low_cost_high_roi_mint_loop(roi_details, mint_patterns, proxy_patterns)
+        assert score > 0
+        assert details["detected"] is True
+        assert details["proxy_mint_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_detector_outputs_p1_mint_loop_signals(self):
+        logs = [
+            _make_erc20_log(ZERO_ADDRESS, THECOUNTER, 50_000_000 * 10**18, USR_TOKEN, 1),
+            _make_erc20_log(THECOUNTER, ATTACKER, 49_950_000 * 10**18, USR_TOKEN, 2),
+            _make_erc20_log(THECOUNTER, TREASURY, 100_000 * 10**6, USDC_TOKEN, 3),
+            _make_erc20_log(TREASURY, ATTACKER, 200_000 * 10**6, USDC_TOKEN, 4),
+        ]
+        det = EconomicAnomalyDetector(node_id="e1")
+        det._token_price_cache = self._mock_price_cache()
+        from nodes.detectors.base import DetectorInputMixin
+        tx = DetectorInputMixin(
+            from_address=ATTACKER,
+            to_address=THECOUNTER,
+            chain_id=1,
+            value=0,
+            logs=logs,
+        )
+
+        output = await det.process(tx)
+
+        assert "ZERO_COST_PROXY_MINT_PATTERN" in output.detection["signals"]
+        assert "ZERO_COST_HIGH_RATIO_MINT" in output.detection["signals"]
+        assert output.detection["signal_scores"]["zero_cost_proxy_pattern"] > 0
+        assert output.detection["signal_scores"]["zero_cost_high_ratio_mint"] > 0
+
+
+# ---------------------------------------------------------------------------
 # 阴性测试
 # ---------------------------------------------------------------------------
 
@@ -374,6 +666,9 @@ class TestNegativeCases:
             chain_id=1, native_price=2000.0,
         )
         assert zctg_score == 0.0
+
+        srp_score, _ = detect_swap_reverse_pattern([])
+        assert srp_score == 0.0
 
 
 # ---------------------------------------------------------------------------

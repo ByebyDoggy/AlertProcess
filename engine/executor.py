@@ -295,7 +295,7 @@ class ChainExecutor:
         if not is_memory_node:
             for edge in incoming_edges:
                 source_output = ctx.get_output(edge.source_id)
-                if source_output is not None and source_output.early_stop:
+                if source_output is not None and getattr(source_output, "early_stop", False):
                     # 上游节点提前停止，阻止下游执行（Memory 除外）
                     return False
 

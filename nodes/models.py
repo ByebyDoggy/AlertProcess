@@ -89,10 +89,11 @@ class DetectorResult(BaseModel):
     """
     Detector 检测结果模型 — Detector 节点的 detection 输出端口。
 
-    用于传递检测结果（score, passed, severity, labels, detection）。
+    用于传递检测结果（score, passed, severity, labels, detection, logs）。
     """
     score: float = Field(ge=0, le=100, description="0-100 风险评分")
     passed: bool = Field(description="评分是否 >= 配置的阈值")
     severity: str = Field(description="UNKNOWN/LOW/MEDIUM/HIGH/CRITICAL")
     labels: list[str] = Field(default_factory=list, description="命中的检测标签列表")
     detection: dict[str, Any] = Field(default_factory=dict, description="各检测器特有的检测结果数据")
+    logs: list[str] = Field(default_factory=list, description="评分原因日志，记录各评分步骤的判定依据")

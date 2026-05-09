@@ -65,6 +65,13 @@ export async function testNode(nodes, edges, targetNodeId, upstreamOutputs = {},
   })
 }
 
+export async function generateRuleChainWithAI(payload) {
+  return apiService.request('/rule-chain/ai/generate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 /**
  * 输入转换器 (Input Transformer) API
  */

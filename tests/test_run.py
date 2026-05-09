@@ -117,7 +117,7 @@ CHAIN_WITH_ACTION = {
     ],
     "edges": [
         {"id": "e1", "source": "trigger_1", "source_port": "output", "target": "fl_1", "target_port": "input"},
-        {"id": "e2", "source": "fl_1", "source_port": "output", "target": "action_1", "target_port": "input"},
+        {"id": "e2", "source": "fl_1", "source_port": "detection", "target": "action_1", "target_port": "input"},
     ],
 }
 

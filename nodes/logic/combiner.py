@@ -67,7 +67,7 @@ class CombinerNode(BaseNode):
     icon: str = "\U0001f500"
     color: str = "#06b6d4"
 
-    category: NodeCategory = NodeCategory.LOGIC
+    category: NodeCategory = NodeCategory.PROVIDER
 
     # ── Pydantic 配置模型 ──
     ConfigModel: type = CombinerConfigModel

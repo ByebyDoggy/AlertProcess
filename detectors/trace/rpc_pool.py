@@ -383,9 +383,19 @@ class AsyncRpcPoolManager:
         reach_limit_exc: type = NodeUnreachableError,
         refresh_interval: float = 60.0,
         db_engine=None,
+        stats_report_url: str = "",
+        stats_report_token: str = "",
+        stats_report_interval: float = 30.0,
+        pool_identifier: str = "",
     ) -> "AsyncRpcPoolManager":
         """
         工厂方法: 创建并初始化 AsyncDynamicKeyManager + 连接所有客户端。
+
+        Args:
+            stats_report_url: apipool-server URL, 传入则启用 stats 推送
+            stats_report_token: 认证 token
+            stats_report_interval: 推送间隔秒数
+            pool_identifier: 池标识符 (用于 stats 推送)
         """
         instance = cls(
             endpoints=endpoints,
@@ -414,6 +424,10 @@ class AsyncRpcPoolManager:
             api_key_factory=_api_key_factory,
             refresh_interval=refresh_interval,
             config_fetcher=_config_fetcher,
+            pool_identifier=pool_identifier,
+            stats_report_url=stats_report_url,
+            stats_report_token=stats_report_token,
+            stats_report_interval=stats_report_interval,
         )
 
         # 执行初始异步初始化
@@ -795,6 +809,10 @@ class AsyncRpcServerPoolManager:
             chain_id=self.chain_id,
             reach_limit_exc=NodeUnreachableError,
             refresh_interval=60.0,
+            stats_report_url=self._service_url,
+            stats_report_token=self._auth_token,
+            stats_report_interval=30.0,
+            pool_identifier=self._pool_identifier,
         )
 
     async def _ensure_token_valid(self):

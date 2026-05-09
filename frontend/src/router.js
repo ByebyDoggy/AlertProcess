@@ -3,6 +3,8 @@ import RuleChainEditor from './views/RuleChainEditor.vue'
 import KnowledgeBase from './views/KnowledgeBase.vue'
 import ChainAnalysis from './views/ChainAnalysis.vue'
 import PoolConfig from './views/PoolConfig.vue'
+import SystemConfig from './views/SystemConfig.vue'
+import NodeDocsView from './views/NodeDocsView.vue'
 
 const routes = [
   {
@@ -13,6 +15,11 @@ const routes = [
     path: '/rule-chain',
     name: 'RuleChain',
     component: RuleChainEditor,
+  },
+  {
+    path: '/node-docs',
+    name: 'NodeDocs',
+    component: NodeDocsView,
   },
   {
     path: '/knowledge-base',
@@ -30,6 +37,12 @@ const routes = [
     name: 'PoolConfig',
     component: PoolConfig,
     meta: { title: 'Pool Configuration' }
+  },
+  {
+    path: '/system-config',
+    name: 'SystemConfig',
+    component: SystemConfig,
+    meta: { title: 'System Configuration' }
   },
 ]
 

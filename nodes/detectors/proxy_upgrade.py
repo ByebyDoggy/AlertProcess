@@ -23,6 +23,7 @@ from pydantic import Field
 
 from nodes.base import NodeRegistry, score_to_severity
 from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorInputMixin, DetectorOutputMixin
+from nodes.detectors.privileged_address import detect_large_fund_outflow
 
 # EIP-1967 标准事件 Topic Hash
 PROXY_EVENT_TOPICS: dict[str, str] = {
@@ -84,8 +85,17 @@ class ProxyUpgradeDetector(BaseDetector):
             default="0x0000000000000000000000000000000000000000000000000000000000000000",
             description="DEFAULT_ADMIN_ROLE 的 bytes32 哈希",
         )
+        large_outflow_threshold_usd: float = Field(
+            default=50000.0, ge=0,
+            description="控制权事件后视为大额资金外流的 USD 阈值",
+        )
+        known_protocol_addresses: list[str] = Field(
+            default_factory=list,
+            description="已知协议内部地址列表，用于区分对外资金流出",
+        )
 
     description: str = (
+        "[数据需求: 仅Logs] "
         "检测 EIP-1967 代理合约升级操作：监控 Upgraded / AdminChanged / "
         "BeaconUpgraded / OwnershipTransferred 事件。复合升级+管理员变更给 95 分，"
         "单独升级给 80 分，所有权转移到 zero 地址给 90 分。"
@@ -122,9 +132,11 @@ class ProxyUpgradeDetector(BaseDetector):
         issues: list[str] = []
         score = 0.0
         detected_events: list[dict] = []
+        score_logs: list[str] = []
 
         has_upgraded = False
         has_admin_changed = False
+        has_control_change = False
 
         for log in logs:
             topic0 = self._extract_topic0(log)
@@ -137,10 +149,12 @@ class ProxyUpgradeDetector(BaseDetector):
 
             if event_name == "Upgraded":
                 has_upgraded = True
+                has_control_change = True
                 impl_addr = self._extract_address_from_topic(
                     topics[1] if len(topics) > 1 else ""
                 )
                 issues.append(f"PROXY_UPGRADED:{contract_addr}→{impl_addr}")
+                score_logs.append(f"proxy upgraded: {contract_addr} -> {impl_addr}")
                 score = max(score, 80.0)
                 detected_events.append({
                     "event": "Upgraded",
@@ -150,6 +164,7 @@ class ProxyUpgradeDetector(BaseDetector):
 
             elif event_name == "AdminChanged":
                 has_admin_changed = True
+                has_control_change = True
                 prev_admin = self._extract_address_from_topic(
                     topics[1] if len(topics) > 1 else ""
                 )
@@ -163,6 +178,7 @@ class ProxyUpgradeDetector(BaseDetector):
                     new_admin = "0x" + data[90:130] if len(data) >= 130 else new_admin
 
                 issues.append(f"ADMIN_CHANGED:{prev_admin}→{new_admin}")
+                score_logs.append(f"admin changed: {prev_admin} -> {new_admin}")
                 score = max(score, 75.0)
                 detected_events.append({
                     "event": "AdminChanged",
@@ -172,10 +188,12 @@ class ProxyUpgradeDetector(BaseDetector):
                 })
 
             elif event_name == "BeaconUpgraded":
+                has_control_change = True
                 beacon_addr = self._extract_address_from_topic(
                     topics[1] if len(topics) > 1 else ""
                 )
                 issues.append(f"BEACON_UPGRADED:{contract_addr}→{beacon_addr}")
+                score_logs.append(f"beacon upgraded: {contract_addr} -> {beacon_addr}")
                 score = max(score, 75.0)
                 detected_events.append({
                     "event": "BeaconUpgraded",
@@ -199,15 +217,20 @@ class ProxyUpgradeDetector(BaseDetector):
 
                 if new_owner == ZERO_ADDRESS:
                     # 所有权转给 zero — 锁死或放弃
+                    has_control_change = True
                     issues.append(f"OWNERSHIP_RENOUNCED:{contract_addr}")
+                    score_logs.append(f"ownership renounced: {contract_addr}")
                     score = max(score, 90.0)
                     event_detail["risk"] = "ownership_renounced"
                 elif new_owner.lower() not in KNOWN_SAFE_ADDRESSES:
+                    has_control_change = True
                     issues.append(f"OWNERSHIP_TRANSFERRED:{contract_addr}→{new_owner}")
+                    score_logs.append(f"ownership transferred to external address: {new_owner}")
                     score = max(score, 65.0)
                     event_detail["risk"] = "unknown_new_owner"
                 else:
                     issues.append(f"OWNERSHIP_TO_KNOWN:{new_owner}")
+                    score_logs.append(f"ownership transferred to known safe address: {new_owner}")
                     score = max(score, 20.0)
                     event_detail["risk"] = "known_safe"
                 detected_events.append(event_detail)
@@ -226,13 +249,19 @@ class ProxyUpgradeDetector(BaseDetector):
                 is_admin_role = topics[1].lower().endswith(admin_role.lstrip("0x")) if len(topics) > 1 else False
 
                 if event_name == "RoleGranted" and is_admin_role:
+                    has_control_change = True
                     issues.append(f"ADMIN_ROLE_GRANTED:{account}")
+                    score_logs.append(f"admin role granted to {account}")
                     score = max(score, 70.0)
                 elif event_name == "RoleGranted":
+                    has_control_change = True
                     issues.append(f"ROLE_GRANTED:{account}")
+                    score_logs.append(f"role granted to {account}")
                     score = max(score, 45.0)
                 elif event_name == "RoleRevoked":
+                    has_control_change = True
                     issues.append(f"ROLE_REVOKED:{account}")
+                    score_logs.append(f"role revoked from {account}")
                     score = max(score, 30.0)
 
                 detected_events.append({
@@ -246,7 +275,40 @@ class ProxyUpgradeDetector(BaseDetector):
         # 复合攻击加权：Upgraded + AdminChanged 同时出现
         if has_upgraded and has_admin_changed:
             issues.append("COMPOUND_UPGRADE_AND_ADMIN_CHANGE")
+            score_logs.append("proxy upgraded and admin changed in same transaction")
             score = max(score, 95.0)
+
+        protocol_addrs = [
+            addr.lower()
+            for addr in (
+                self.config.get("known_protocol_addresses", [])
+                or tx_context.get_extra("known_protocol_addresses", [])
+                or []
+            )
+            if isinstance(addr, str) and addr
+        ]
+        outflow_score = 0.0
+        outflow_details: list[dict[str, Any]] = []
+        total_outflow_usd = 0.0
+        external_outflows: list[dict[str, Any]] = []
+        if has_control_change:
+            outflow_score, outflow_details, total_outflow_usd = detect_large_fund_outflow(
+                tx_context.from_address,
+                tx_context.logs or [],
+                tx_context.chain_id or 1,
+                min_outflow_usd=self.config.get("large_outflow_threshold_usd", 50000.0),
+                known_protocol_addresses=protocol_addrs,
+            )
+            external_outflows = [
+                item for item in outflow_details
+                if isinstance(item, dict)
+            ]
+            if total_outflow_usd > 0:
+                score_logs.append(f"external outflow after control change: ${total_outflow_usd:,.2f}")
+            if outflow_score > 0 and external_outflows:
+                issues.append("PRIVILEGED_DRAIN_AFTER_CONTROL_CHANGE")
+                score_logs.append("control change followed by external fund outflow")
+                score = max(score, 92.0 if has_upgraded or has_admin_changed else 85.0)
 
         labels = issues if score >= self.config.get("threshold", 50) else []
 
@@ -268,11 +330,21 @@ class ProxyUpgradeDetector(BaseDetector):
             passed=score >= self.config.get("threshold", 50.0),
             severity=score_to_severity(score),
             labels=labels,
+            logs=score_logs,
             detection={
                 "detected_events": detected_events,
                 "detected_issues": issues,
                 "has_upgraded": has_upgraded,
                 "has_admin_changed": has_admin_changed,
+                "has_control_change": has_control_change,
+                "outflow_details": outflow_details,
+                "outflow_breakdown": {
+                    "external_targets": sorted({item["to"].lower() for item in external_outflows if item.get("to")})[:10],
+                    "protocol_targets": protocol_addrs[:10],
+                    "external_count": len({item["to"].lower() for item in external_outflows if item.get("to")}),
+                    "protocol_count": len(protocol_addrs),
+                    "total_outflow_usd": round(total_outflow_usd, 2),
+                },
                 "labels": labels,
                 # 聚合字段 — 供 ContextMemoryNode 存储
                 "upgraded_contracts": upgraded_contracts,

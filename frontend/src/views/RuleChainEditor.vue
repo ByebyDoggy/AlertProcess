@@ -39,6 +39,10 @@
         </label>
       </div>
       <div v-if="chainDataStore.currentChainId || chainDataStore.nodes.length > 0" class="flex items-center gap-2">
+        <button @click="showAIPanel = true"
+          class="px-3 py-1.5 bg-purple-600/80 hover:bg-purple-600 rounded-lg text-white text-sm font-medium transition">
+          AI 生成规则链
+        </button>
         <button @click="handleValidate" :disabled="validating"
           class="px-3 py-1.5 bg-emerald-600/80 hover:bg-emerald-600 disabled:bg-[#3d3d60] rounded-lg text-white text-sm font-medium transition">
           {{ validating ? '验证中...' : '验证规则链' }}
@@ -142,6 +146,100 @@
       :chain-id="chainDataStore.currentChainId"
       @close="showTestRun = false"
     />
+
+    <div v-if="showAIPanel" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-6">
+      <div class="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-[#16162a] border border-[#2d2d50] rounded-xl shadow-2xl">
+        <div class="px-5 py-4 border-b border-[#2d2d50] flex items-center justify-between">
+          <div>
+            <h2 class="text-white font-semibold">AI 生成规则链</h2>
+            <p class="text-xs text-gray-500 mt-1">输入检测需求，生成可校验的规则链草稿。</p>
+          </div>
+          <button @click="showAIPanel = false" class="text-gray-500 hover:text-gray-300">&#10005;</button>
+        </div>
+        <div class="p-5 space-y-4">
+          <textarea v-model="aiPrompt" rows="4" class="form-input !w-full" placeholder="例如：检测闪电贷攻击，并在高风险时设置严重级别为 CRITICAL"></textarea>
+          <div class="flex items-center gap-3">
+            <select v-model="aiMode" class="form-input !w-40 !py-1.5">
+              <option value="new">新建</option>
+              <option value="replace">替换当前链</option>
+            </select>
+            <label class="flex items-center gap-2 text-sm text-gray-400">
+              <input type="checkbox" v-model="aiAllowActions" class="w-4 h-4 rounded">
+              允许 Action 节点
+            </label>
+            <button @click="handleAIGenerate" :disabled="aiGenerating || !aiPrompt.trim()"
+              class="ml-auto px-4 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-[#3d3d60] rounded-lg text-white text-sm font-medium transition">
+              {{ aiGenerating ? '生成中...' : '生成草稿' }}
+            </button>
+          </div>
+
+          <div v-if="aiError" class="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+            {{ aiError.message || aiError }}
+            <div v-if="aiError.suggestion" class="text-xs text-red-200/70 mt-1">{{ aiError.suggestion }}</div>
+          </div>
+
+          <div v-if="aiResult" class="space-y-3">
+            <div class="bg-[#1f1f38] border border-[#2d2d50] rounded-lg p-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-white font-medium">{{ aiResult.draft?.name }}</div>
+                  <div class="text-xs text-gray-400 mt-1">{{ aiResult.draft?.description }}</div>
+                </div>
+                <span :class="aiResult.validation?.valid ? 'text-emerald-400' : 'text-red-400'" class="text-sm">
+                  {{ aiResult.validation?.valid ? '校验通过' : '校验失败' }}
+                </span>
+              </div>
+              <div class="grid grid-cols-2 gap-3 mt-3 text-xs text-gray-400">
+                <span>节点：{{ aiResult.draft?.nodes?.length || 0 }}</span>
+                <span>连线：{{ aiResult.draft?.edges?.length || 0 }}</span>
+              </div>
+            </div>
+
+            <div v-if="aiResult.explanation" class="text-sm text-gray-300 bg-[#1f1f38] rounded-lg px-3 py-2">
+              {{ aiResult.explanation }}
+            </div>
+
+            <div v-if="(aiResult.assumptions || []).length" class="text-xs text-gray-400">
+              <div class="mb-1">假设：</div>
+              <ul class="list-disc list-inside space-y-0.5">
+                <li v-for="(item, i) in aiResult.assumptions" :key="i">{{ item }}</li>
+              </ul>
+            </div>
+
+            <div v-if="(aiResult.validation?.errors || []).length" class="space-y-1">
+              <div v-for="(err, i) in aiResult.validation.errors" :key="i" class="text-xs text-red-300 bg-red-500/10 rounded px-2 py-1">
+                <div class="font-medium">{{ err.field_path }}: {{ err.message }}</div>
+                <div v-if="err.suggestion" class="text-red-200/70 mt-0.5">建议：{{ err.suggestion }}</div>
+              </div>
+            </div>
+
+            <div v-if="(aiResult.validation?.warnings || []).length" class="space-y-1">
+              <div v-for="(warning, i) in aiResult.validation.warnings" :key="`w-${i}`" class="text-xs text-yellow-300 bg-yellow-500/10 rounded px-2 py-1">
+                <div class="font-medium">{{ warning.field_path }}: {{ warning.message }}</div>
+                <div v-if="warning.suggestion" class="text-yellow-200/70 mt-0.5">建议：{{ warning.suggestion }}</div>
+              </div>
+            </div>
+
+            <div v-if="Object.keys(aiResult.generation_meta || {}).length" class="text-xs text-gray-400 bg-[#1f1f38] rounded-lg px-3 py-2">
+              <div class="mb-1">生成信息：</div>
+              <ul class="space-y-0.5">
+                <li v-if="aiResult.generation_meta?.model">模型：{{ aiResult.generation_meta.model }}</li>
+                <li v-if="aiResult.generation_meta?.mode">模式：{{ aiResult.generation_meta.mode }}</li>
+                <li>基于当前画布：{{ aiResult.generation_meta?.used_current_chain ? '是' : '否' }}</li>
+              </ul>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-2">
+              <button @click="aiResult = null" class="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 rounded-lg text-white text-sm">重新编辑</button>
+              <button @click="handleAIApply" :disabled="!aiResult.validation?.valid"
+                class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-[#3d3d60] rounded-lg text-white text-sm font-medium">
+                应用到画布
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 单节点测试面板 (n8n 式逐节点调试) -->
     <NodeTestPanel
@@ -258,6 +356,14 @@ const selectedEdge = computed(() =>
 const saving = ref(false)
 const validating = ref(false)
 const validationResult = ref(null)
+
+const showAIPanel = ref(false)
+const aiPrompt = ref('')
+const aiMode = ref('new')
+const aiAllowActions = ref(true)
+const aiGenerating = ref(false)
+const aiResult = ref(null)
+const aiError = ref(null)
 
 function onNodeConfigSave(updatedNode) {
   chainDataStore.updateNode(updatedNode.id, { label: updatedNode.label })
@@ -575,6 +681,48 @@ async function handleValidate() {
   } finally {
     validating.value = false
   }
+}
+
+async function handleAIGenerate() {
+  aiGenerating.value = true
+  aiError.value = null
+  aiResult.value = null
+  try {
+    const result = await chainApi.generateRuleChainWithAI({
+      prompt: aiPrompt.value,
+      mode: aiMode.value,
+      current_chain: {
+        nodes: chainDataStore.nodes,
+        edges: chainDataStore.edges,
+      },
+      constraints: {
+        max_nodes: 10,
+        allow_actions: aiAllowActions.value,
+        allow_scripting: false,
+      },
+    })
+    if (!result.success) {
+      aiError.value = result.error || { message: 'AI 生成失败' }
+      return
+    }
+    aiResult.value = result
+  } catch (e) {
+    aiError.value = { message: e.message }
+  } finally {
+    aiGenerating.value = false
+  }
+}
+
+function handleAIApply() {
+  if (!aiResult.value?.validation?.valid || !aiResult.value?.draft) return
+  const shouldReplace = aiMode.value === 'replace' || chainDataStore.nodes.length > 0
+  if (shouldReplace && !confirm('应用 AI 草稿将替换当前画布，是否继续？')) return
+  chainDataStore.applyDraft(aiResult.value.draft)
+  validationResult.value = aiResult.value.validation
+  aiResult.value = null
+  aiError.value = null
+  showAIPanel.value = false
+  showToast('AI 草稿已应用到画布', 'success')
 }
 
 // Watch chainName changes to sync tab name

@@ -37,7 +37,7 @@ class TokenAnomalyDetector(BaseDetector):
         )
 
     label: str = "代币异常检测"
-    description: str = "检测异常代币转账模式：大额 ERC20/ETH 转账（80 分）、新部署代币的早期活动（60 分）、非常规合约交互（30 分）。可配置各链的大额阈值和新区块号基准"
+    description: str = "[数据需求: 仅交易基础字段] 检测异常代币转账模式：大额 ERC20/ETH 转账（80 分）、新部署代币的早期活动（60 分）、非常规合约交互（30 分）。可配置各链的大额阈值和新区块号基准"
     icon: str = "\U0001f4b0"
     color: str = "#ec4899"
 

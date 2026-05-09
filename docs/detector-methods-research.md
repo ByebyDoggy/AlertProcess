@@ -254,6 +254,234 @@ Upgraded: 0xbc7cd75a
 
 ---
 
+## 九、攻击事件分析驱动检测器开发（BlockSec 全量事件库）
+
+> **整理日期**: 2026-05-07  
+> **数据来源**: `blocksec_incidents.json`（由 `scripts/crawl_blocksec_incidents.py` 全量抓取）  
+> **样本规模**: 269 incidents / 974 transactions / 952 usable tx hashes
+
+### 9.1 样本选择方法
+
+本轮不是从单个攻击事件反推检测器，而是先对 BlockSec 安全事件库做全量抓取，再按 root cause 聚类，选取高损失、特征明确、跨协议可泛化的代表样本。
+
+本轮优先样本：
+
+| Root Cause | 项目 | Loss | Chain | 代表 tx |
+|-----------|------|------|-------|---------|
+| Business Logic Flaw | Euler Finance | $200.00M | Ethereum | `0x3097830e9921e4063d334acb82f6a79374f76f0b1a8f857e89b89bc58df1f311` |
+| Access Control Issue | Cork | $11.98M | Ethereum | `0xfd89cdd0be468a564dd525b222b728386d7c6780cf7b2f90d2b54493be09f64d` |
+| Compromised Private Key | Bybit | $1.50B | Ethereum | `0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c` |
+| Vulnerable Price Dependency | UwU Lend | $23.00M | Ethereum | `0x9235e0662e230bdfa94f56f4932fd09a95fea17e4b9b44a4f40a59449e216110` |
+| Reentrancy | Curve | $60.00M | Ethereum | `0x006763dff653ecddfd3681181a29e7e6d6c2aaa7bafb27fe1376f3f7ce367c1e` |
+
+这些样本的意义不在于“复刻攻击细节”，而在于抽取**不依赖协议私有函数签名**、尽量只依赖 logs / trace / transfer / address role 的通用检测信号。
+
+### 9.2 数据集层面的攻击面分布
+
+按 incident 数量看，当前 BlockSec 事件库中最值得优先投入的类别为：
+
+1. **Business Logic Flaw**
+2. **Access Control Issue**
+3. **Compromised Private Key**
+4. **Vulnerable / Flawed Price Dependency**
+5. **Reentrancy**
+
+这五类同时满足：
+- 样本数量多；
+- 单次损失高；
+- 已有检测器基础存在增强空间；
+- 能沉淀为跨协议通用能力。
+
+### 9.3 与现有检测器的映射关系
+
+| 攻击类别 | 现有可复用检测器 | 当前优势 | 当前缺口 |
+|---------|------------------|----------|----------|
+| Business Logic Flaw | `fund_drain_detector`, `economic_anomaly_detector`, `strategy_drain_detector` | 已支持 transfer / swap / mint / burn / ROI / 净获利分析 | 缺少“低投入→多步套利→单交易受害方净流失”联合评分 |
+| Access Control Issue | `privileged_address_detector`, `proxy_upgrade_detector` | 已支持特权地址、异常 selector、升级/权限事件 | 缺少“权限变更 + 资金外流 + 新管理员/未知 owner”组合检测 |
+| Compromised Private Key | `privileged_address_detector`, `fund_drain_detector`, `gas_price_detector` | 已支持特权调用、大额外流、gas 异常 | 缺少“特权地址主动发起 + 多资产快速清仓 + 外部接收方”联合检测 |
+| Vulnerable Price Dependency | `price_manipulation_detector`, `oracle_manipulation_detector` | 已支持 swap 价格偏移、swap→drain、预言机时序 | 缺少“价格偏移后立即借贷/清算/提款”的闭环检测 |
+| Reentrancy | `reentrancy_detector`, `fund_drain_detector` | 已支持重复日志频次和外流分析 | 当前 `reentrancy_detector` 过于粗糙，缺少重复受益人、递归式资产释放、trace 级重入路径 |
+
+### 9.4 建议的检测器增强方向
+
+> **P0 实施状态（2026-05-07）**
+> 已完成首批落地：
+> - `fund_drain_detector`：加入最大受害方外流结构化证据、多资产外流、外部接收方聚合信号；
+> - `privileged_address_detector`：加入特权地址主动大额提取信号，并将未知 selector 收敛为必须与特权身份或资金外流联动才计分；
+> - `price_manipulation_detector`：加入同池连续 swap 压力，以及“价格偏移后紧随资金回收”的闭环信号。
+> 
+> 对应新增结构化输出字段：
+> - `fund_drain_detector.detection.outflow_signals`
+> - `privileged_address_detector.detection.outflow_breakdown`
+> - `price_manipulation_detector.detection.repeated_swap_pressure`
+> - `price_manipulation_detector.detection.price_deviation_with_drain`
+
+#### A. Business Logic Flaw
+
+代表样本：Euler Finance  
+核心通用信号：
+- 攻击者初始资本极低或可忽略；
+- 同一交易内出现多段 swap / mint / burn / borrow / withdraw 风格资产流转；
+- 攻击者或关联地址净收益极高；
+- 协议/受害地址净流失显著；
+- 不一定依赖 upgrade / admin / known privileged path。
+
+建议增强：
+1. 在 `fund_drain_detector` 中加入**最大受害方净流失**分析，而不只看最大获利方。  
+2. 在 `economic_anomaly_detector` 中加入**低成本进入 + 高 ROI + mint/burn/swap 组合**的叠加评分。  
+3. 在 `strategy_drain_detector` 中沉淀“赎回/销毁后紧随大额底层资产外流”的泛化规则。  
+4. 新增一个通用标签：`BUSINESS_LOGIC_EXTRACTION_PATTERN`，用于 combiner 汇总。
+
+**本轮落地结果（已完成）**:
+- `fund_drain_detector` 已补充最大亏损地址的 `outflow_signals` 输出，显式给出 `victim_address`、`loss_tokens`、`top_external_receivers`。
+- 已新增 `MULTI_ASSET_DRAIN` 与 `RECEIVER_CLUSTER` 两类信号，用于表达多资产清仓与接收方聚合模式。
+- 当前 `fund_drain_detector` 已可作为后续 `strategy_drain` / `reentrancy` 联动的结构化资金外流底座。
+
+优先改动文件：
+- [nodes/detectors/fund_drain.py](nodes/detectors/fund_drain.py)
+- [nodes/detectors/economic_anomaly.py](nodes/detectors/economic_anomaly.py)
+- [nodes/detectors/strategy_drain.py](nodes/detectors/strategy_drain.py)
+
+#### B. Access Control Issue
+
+代表样本：Cork  
+核心通用信号：
+- 调用者具备异常高权限；
+- calldata selector 不属于常见公开 DeFi 函数；
+- 同交易伴随 `OwnershipTransferred` / `RoleGranted` / `AdminChanged` / `Upgraded` 等事件；
+- 紧接出现协议资产流向未知外部地址。
+
+建议增强：
+1. 在 `privileged_address_detector` 中把**异常 selector + 大额外流**联动加权。  
+2. 在 `proxy_upgrade_detector` 中把**权限事件后紧随资产转移**视为高风险复合信号。  
+3. 为 `privileged_address_detector` 增加 `known_protocol_addresses` 与 `sensitive_role_addresses` 的组合配置。  
+4. 新增统一标签：`PRIVILEGED_DRAIN_AFTER_CONTROL_CHANGE`。
+
+**本轮落地结果（已完成）**:
+- `privileged_address_detector` 已将孤立未知 selector 降为弱信号，只有与特权身份、控制路径或大额外流联动时才真正计分。
+- 已增加 `PRIVILEGED_LARGE_WITHDRAW` 专项信号，覆盖特权地址主动发起的大额对外提取。
+- 已输出 `outflow_breakdown`，区分 `external_targets` 与 `protocol_targets`，便于后续和升级/权限事件做组合判断。
+
+优先改动文件：
+- [nodes/detectors/privileged_address.py](nodes/detectors/privileged_address.py)
+- [nodes/detectors/proxy_upgrade.py](nodes/detectors/proxy_upgrade.py)
+- [nodes/detectors/fund_drain.py](nodes/detectors/fund_drain.py)
+
+#### C. Compromised Private Key
+
+代表样本：Bybit  
+核心通用信号：
+- 交易由特权地址主动发起；
+- 交易本身零投入或低投入；
+- 协议金库/热钱包/多签相关地址出现大额多资产外流；
+- 接收方为外部地址，而非协议内部资金归集地址；
+- gas 使用/费用往往显著偏高，体现紧急转移。
+
+建议增强：
+1. 在 `privileged_address_detector` 中新增**特权地址主动发起大额提取**专项评分。  
+2. 在 `fund_drain_detector` 中增强**多资产同时清仓**、**外部地址接收集中度**分析。  
+3. 在 `gas_price_detector` 中把高 gas 仅作为辅助分，而不是主判断。  
+4. 补充统一标签：`PRIVILEGED_WALLET_DRAIN_PATTERN`。
+
+**本轮落地结果（已完成）**:
+- `privileged_address_detector` 已落地 `PRIVILEGED_LARGE_WITHDRAW`，覆盖“特权地址主动发起 + 对外大额提取”的核心私钥失陷提款模式。
+- `fund_drain_detector` 已落地 `MULTI_ASSET_DRAIN` 与 `RECEIVER_CLUSTER`，可表达金库/热钱包被快速多资产清仓且流向少数外部接收方的模式。
+- 当前仍未把 `gas_price_detector` 纳入主判定链路；高 gas 保持为辅助证据，避免把紧急正常操作误判为攻击。
+
+优先改动文件：
+- [nodes/detectors/privileged_address.py](nodes/detectors/privileged_address.py)
+- [nodes/detectors/fund_drain.py](nodes/detectors/fund_drain.py)
+- [nodes/detectors/gas_price.py](nodes/detectors/gas_price.py)
+
+#### D. Vulnerable Price Dependency
+
+代表样本：UwU Lend  
+核心通用信号：
+- 同一交易内存在显著价格偏移；
+- 多次 swap 或多跳路由；
+- 价格偏移后立刻触发借贷、清算、提款、抵押品相关操作；
+- 利润在短窗口内回收到攻击者地址。
+
+建议增强：
+1. 在 `price_manipulation_detector` 中把**同池连续 swap 价格偏移**与**后续 drain**绑定评分。  
+2. 在 `oracle_manipulation_detector` 中强化**swap 在前、price query / price-dependent action 在后**的时序约束。  
+3. 若 trace 可用，新增“价格操纵后的协议调用深度跃迁”特征。  
+4. 统一标签建议：`PRICE_SHIFT_THEN_EXTRACTION`。
+
+**本轮落地结果（已完成）**:
+- `price_manipulation_detector` 已新增 `repeated_swap_pressure`，用于识别同池同方向连续 swap 压力，而不只依赖单次价格偏移。
+- 已新增 `price_deviation_with_drain`，将显著价格偏移与紧随其后的资金回收链路做结构化绑定。
+- 已补充 `PRICE_DEVIATION_WITH_DRAIN`、`REPEATED_SWAP_PRESSURE`、`REPEATED_SWAP_WITH_DRAIN` 等信号，使价格操纵闭环更接近真实利用路径。
+- `oracle_manipulation_detector` 的更强时序约束仍属于后续 P1/P2 工作，当前 P0 仍保持纯 log 驱动实现。
+
+优先改动文件：
+- [nodes/detectors/price_manipulation.py](nodes/detectors/price_manipulation.py)
+- [nodes/detectors/protocol/oracle_manipulation.py](nodes/detectors/protocol/oracle_manipulation.py)
+- [nodes/detectors/fund_drain.py](nodes/detectors/fund_drain.py)
+
+#### E. Reentrancy
+
+代表样本：Curve  
+核心通用信号：
+- 同一合约地址在同交易中高频重复出现在日志/trace 中；
+- 同类资产释放动作多次发生；
+- 受益地址重复出现，且累计净收益显著；
+- 事件序列具有“释放→回调→再次释放”的递归风格。
+
+建议增强：
+1. `reentrancy_detector` 不应只统计日志次数，还应引入**重复受益人**和**重复资产外流**分析。  
+2. 把 `fund_drain_detector` 的净收益结果与 `reentrancy_detector` 联动，避免仅凭日志频次误报。  
+3. 若 trace 可用，在 trace 层增加 A→B→A 型路径检测，作为行为级强信号。  
+4. 统一标签建议：`RECURSIVE_ASSET_RELEASE_PATTERN`。
+
+优先改动文件：
+- [nodes/detectors/reentrancy.py](nodes/detectors/reentrancy.py)
+- [nodes/detectors/fund_drain.py](nodes/detectors/fund_drain.py)
+- `detectors/trace/` 下的重入行为检测器（后续补充）
+
+### 9.5 实施优先级
+
+建议按以下顺序实现：
+
+**P0（应先做）**
+1. 增强 `fund_drain_detector`：受害方净流失、多资产清仓、外部地址接收集中度  
+2. 增强 `privileged_address_detector`：特权发起 + 大额外流 + 异常 selector 联合评分  
+3. 增强 `price_manipulation_detector`：价格偏移与后续 drain 绑定  
+
+**P1（紧随其后）**
+4. 增强 `proxy_upgrade_detector`：控制权变更后资金外流复合风险  
+5. 增强 `economic_anomaly_detector`：低成本高 ROI 闭环  
+6. 增强 `reentrancy_detector`：重复受益人与重复释放模式  
+
+**P2（依赖 trace / 更深数据）**
+7. 增强 `oracle_manipulation_detector`：swap→price query→利用时序（已完成）  
+8. 补行为层重入检测 / 业务逻辑攻击 trace 模式库（重入 trace 已完成，其他业务逻辑 trace 模式待补）
+
+### 9.6 对测试建设的要求
+
+每类增强都至少补三类测试：
+
+1. **阳性样本**：构造与目标模式一致的 logs / transfers / trace。  
+2. **阴性样本**：正常大额交易、正常升级、正常多次 swap，不应误报。  
+3. **组合样本**：单特征弱、组合特征强，验证评分矩阵按预期叠加。
+
+建议优先新增这些测试文件：
+- `tests/nodes/test_detectors/test_fund_drain.py`
+- `tests/nodes/test_detectors/test_privileged_address.py`
+- `tests/nodes/test_detectors/test_price_manipulation.py`
+- `tests/nodes/test_detectors/test_reentrancy.py`
+
+### 9.7 本轮结论
+
+本轮 BlockSec 全量事件库分析的核心结论是：
+
+- 当前项目并不缺“检测器数量”，缺的是**跨 detector 的联合评分能力**；
+- `fund_drain`、`privileged_address`、`price_manipulation` 三类检测器最值得先增强；
+- `reentrancy_detector` 当前过于依赖简单日志计数，优先级高；
+- 最有价值的方向不是继续堆新的单点 detector，而是围绕**资金外流、权限路径、价格偏移、递归释放**建立可复用的组合信号。
+
+---
+
 ## 四、链上地址分析方法体系
 
 ### 4.1 地址特征提取

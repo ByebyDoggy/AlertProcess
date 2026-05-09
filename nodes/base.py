@@ -13,6 +13,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from detectors.trace.token_price_cache import TokenPriceCache
+
 
 # ---------------------------------------------------------------------------
 # 端口定义
@@ -61,6 +63,7 @@ class NodeCategory(Enum):
     ACTION = "action"
     MEMORY = "memory"
     SCRIPTING = "scripting"
+    STORAGE = "storage"
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +88,7 @@ class NodeOutput(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     labels: list[str] = Field(default_factory=list)
     severity: str = "UNKNOWN"
+    logs: list[str] = Field(default_factory=list, description="评分原因日志")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -118,7 +122,6 @@ ALLOWED_TYPE_MAPPING: dict[str, set[str]] = {
     "score_output":       {"detection_output", "score_output", "any"},
     "logic_output":       {"logic_output", "comparison_output", "any"},
     "memory_output":      {"memory_output", "context", "any"},
-    "script_output":      {"script_output", "detection_output", "score_output", "comparison_output", "logic_output", "any"},
 }
 
 # 各节点分类允许接收的输入 data_type
@@ -128,10 +131,11 @@ CATEGORY_ALLOWED_INPUTS: dict[NodeCategory, set[str]] = {
     NodeCategory.DETECTION:  {"context", "any"},
     NodeCategory.COMPARISON: {"detection_output", "score_output"},
     NodeCategory.SCORING:    {"detection_output", "score_output"},
-    NodeCategory.LOGIC:      {"comparison_output", "logic_output", "context", "memory_output", "any"},
+    NodeCategory.LOGIC:      {"comparison_output", "logic_output"},
     NodeCategory.ACTION:     {"any"},
     NodeCategory.MEMORY:     {"detection_output", "score_output", "context", "any"},
     NodeCategory.SCRIPTING:  {"detection_output", "score_output", "context", "any"},
+    NodeCategory.STORAGE:    set(),  # 存储节点无输入
 }
 
 
@@ -210,10 +214,28 @@ class BaseNode(ABC):
     # 实例属性（每个节点实例独立）
     node_id: str = ""
     config: dict[str, Any] = {}
+    _token_price_cache: TokenPriceCache | None = None
 
     def __init__(self, node_id: str = "", config: dict[str, Any] | None = None) -> None:
         self.node_id = node_id
         self.config = config or self.get_default_config()
+
+    @property
+    def token_price_instance(self) -> TokenPriceCache:
+        """
+        获取全局 TokenPriceCache 单例，供任意节点查询代币价格。
+
+        用法:
+          price = self.token_price_instance.get_price(chain_id=1, token_address="0x...")
+          meta = self.token_price_instance.get(chain_id=1, token_address="0x...")
+
+        注意: 原生代币价格（ETH/BNB/MATIC 等）已由 TokenPriceCache 内置
+              硬编码 fallback 价格，无需在节点配置中单独设置。
+        """
+        if self._token_price_cache is None:
+            from detectors.trace.token_price_cache import get_token_price_cache
+            self._token_price_cache = get_token_price_cache()
+        return self._token_price_cache
 
     @classmethod
     @abstractmethod
@@ -495,6 +517,57 @@ class NodeRegistry:
                 "output_schemas": node_class.get_output_schemas(),
                 "input_schema": node_class.get_input_schema(),
                 "output_schema": node_class.get_output_schema(),
+            })
+        return result
+
+    @classmethod
+    def get_docs_for_frontend(cls) -> list[dict[str, Any]]:
+        """
+        生成节点文档专用数据（比 get_schema_for_frontend 更丰富）。
+
+        额外包含:
+        - category_label: 分类中文标签
+        - base_class: 节点基类名称
+        - required_providers: @require 声明的上下文依赖
+        - provides: Provider 节点注入的字段列表
+        - module: 节点类所在模块路径
+        - config_schema_raw: 原始 Pydantic JSON Schema（含 $defs、嵌套等完整信息）
+        """
+        CATEGORY_LABELS = {
+            NodeCategory.INPUT: "输入",
+            NodeCategory.PROVIDER: "上下文查询",
+            NodeCategory.DETECTION: "安全检测",
+            NodeCategory.COMPARISON: "比较",
+            NodeCategory.SCORING: "评分",
+            NodeCategory.LOGIC: "逻辑",
+            NodeCategory.ACTION: "动作",
+            NodeCategory.MEMORY: "记忆",
+            NodeCategory.SCRIPTING: "脚本",
+            NodeCategory.STORAGE: "存储",
+        }
+
+        result = []
+        for name, node_class in sorted(cls._nodes.items()):
+            provides = list(getattr(node_class, "provides", []))
+            result.append({
+                "name": name,
+                "label": node_class.label,
+                "description": node_class.description,
+                "category": node_class.category.value,
+                "category_label": CATEGORY_LABELS.get(node_class.category, node_class.category.value),
+                "base_class": node_class.__bases__[0].__name__ if node_class.__bases__ else "BaseNode",
+                "module": node_class.__module__,
+                "icon": node_class.icon,
+                "color": node_class.color,
+                "inputs": [p.model_dump() for p in node_class.get_inputs()],
+                "outputs": [p.model_dump() for p in node_class.get_outputs()],
+                "config_schema": node_class.get_config_schema(),
+                "config_schema_raw": node_class.ConfigModel.model_json_schema() if node_class.ConfigModel else {},
+                "default_config": node_class.get_default_config(),
+                "input_schemas": node_class.get_input_schemas(),
+                "output_schemas": node_class.get_output_schemas(),
+                "required_providers": list(node_class.get_required_providers()),
+                "provides": provides,
             })
         return result
 

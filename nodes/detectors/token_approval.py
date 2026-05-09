@@ -7,7 +7,8 @@ from typing import Any
 from pydantic import Field
 
 from nodes.base import NodeRegistry
-from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorInputMixin, DetectorOutputMixin
+from nodes.detectors.base import BaseDetector, DetectorConfigMixin, DetectorOutputMixin
+from nodes.models import TransactionContext
 
 MAX_UINT256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
 
@@ -48,7 +49,7 @@ class TokenApprovalDetector(BaseDetector):
         check_infinite_approval: bool = Field(default=True, description="检测无限授权")
 
     label: str = "ERC20 授权检测"
-    description: str = "检测危险的 ERC20 授权操作：无限授权 approve(MAX_UINT256) 给 80 分、setApprovalForAll 60 分、授权给未知合约 50 分。是识别盗币/钓鱼攻击前兆的关键检测器"
+    description: str = "[数据需求: 仅交易基础字段] 检测危险的 ERC20 授权操作：无限授权 approve(MAX_UINT256) 给 80 分、setApprovalForAll 60 分、授权给未知合约 50 分。是识别盗币/钓鱼攻击前兆的关键检测器"
     icon: str = "\U0001f512"
     color: str = "#f97316"
 
@@ -81,9 +82,8 @@ class TokenApprovalDetector(BaseDetector):
     def _is_infinite_approval(amount: int) -> bool:
         return amount >= MAX_UINT256 * 0.99
 
-    async def process(self, input: DetectorInputMixin) -> TokenApprovalOutput:
-        context = input.context
-        input_data = context.get("input_data", "")
+    async def process(self, tx_context: TransactionContext) -> TokenApprovalOutput:
+        input_data = tx_context.input_data or tx_context.extra.get("input_data", "")
         approval = self._parse_approval(input_data)
 
         if not approval:

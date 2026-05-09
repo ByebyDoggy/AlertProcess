@@ -33,6 +33,9 @@
         <li>3. 双击节点编辑配置</li>
         <li>4. Ctrl+S 保存规则链</li>
       </ul>
+      <router-link to="/node-docs" class="mt-2 flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition">
+        <span>&#128218;</span> 查看节点文档
+      </router-link>
     </div>
   </div>
 </template>

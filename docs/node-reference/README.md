@@ -33,6 +33,7 @@
 | [价格操纵检测](./price_manipulation_detector.md) | `price_manipulation_detector` | [数据需求: Logs] 检测现货价格操纵类攻击：单区块极端价格偏移(同一池同一交易内价格变化>10%)、大额Swap后 |
 | [代理合约升级检测](./proxy_upgrade_detector.md) | `proxy_upgrade_detector` | [数据需求: 仅Logs] 检测 EIP-1967 代理合约升级操作：监控 Upgraded / AdminChange |
 | [重入攻击检测](./reentrancy_detector.md) | `reentrancy_detector` | [数据需求: 仅Logs] 检测重入攻击：通过 logs 中合约地址的高频重复出现识别重入模式。同一合约 ≥20 次日志 |
+| [重入Trace检测](./reentrancy_trace_detector.md) | `reentrancy_trace_detector` | [数据需求: Trace(必需)] 基于ETH调用栈识别重入攻击路径：检测同一合约被重复回调、同一资金释放函数递归触发、以及回边模式 |
 | [代币异常检测](./token_anomaly_detector.md) | `token_anomaly_detector` | [数据需求: 仅交易基础字段] 检测异常代币转账模式：大额 ERC20/ETH 转账（80 分）、新部署代币的早期活动（ |
 | [ERC20 授权检测](./token_approval_detector.md) | `token_approval_detector` | [数据需求: 仅交易基础字段] 检测危险的 ERC20 授权操作：无限授权 approve(MAX_UINT256) 给 |
 

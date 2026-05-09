@@ -75,6 +75,17 @@ NATIVE_TOKEN_DEFAULTS = {
     10: {"symbol": "ETH", "decimals": 18, "name": "Optimism"},
 }
 
+# 原生代币硬编码价格（当 MarketDataBase 不可用时的 fallback）
+# 节点不再通过配置设置原生代币价格，统一由 TokenPriceCache 提供
+NATIVE_TOKEN_FALLBACK_PRICES: dict[int, float] = {
+    1: 2000.0,      # ETH
+    56: 700.0,      # BNB
+    137: 1.0,       # MATIC
+    42161: 2000.0,  # Arbitrum ETH
+    10: 2000.0,     # Optimism ETH
+    43114: 35.0,    # Avalanche AVAX
+}
+
 
 class TokenPriceCache:
     """
@@ -139,15 +150,40 @@ class TokenPriceCache:
     # ──── 公开读取接口（纯内存） ────
 
     def get(self, chain_id: int, token_address: str) -> TokenMeta | None:
-        """从内存获取缓存的元数据"""
+        """
+        从内存获取缓存的元数据。
+
+        对于原生代币（token_address 为空字符串），如果缓存中未找到，
+        自动 fallback 到硬编码默认价格。
+        """
         key = self._make_key(chain_id, token_address)
-        return self._cache.get(key)
+        cached = self._cache.get(key)
+        if cached:
+            return cached
+
+        # 原生代币 fallback：缓存中没有时走 _get_native_from_cache
+        if not token_address:
+            return self._get_native_from_cache(chain_id)
+
+        return None
 
     def get_price(self, chain_id: int, token_address: str) -> float | None:
-        """快速获取价格（仅返回内存中的值）"""
+        """
+        快速获取价格。
+
+        对于原生代币，如果缓存中未找到，自动使用硬编码 fallback 价格。
+        对于 ERC-20，缓存中未找到时返回 None。
+        """
         meta = self.get(chain_id, token_address)
         if meta and meta.is_price_fresh:
             return meta.price_usd
+
+        # 原生代币最终 fallback：直接返回硬编码价格
+        if not token_address:
+            fallback = NATIVE_TOKEN_FALLBACK_PRICES.get(chain_id)
+            if fallback:
+                return fallback
+
         return None
 
     async def batch_fetch(
@@ -332,13 +368,19 @@ class TokenPriceCache:
                     fetched_at=proxy_meta.fetched_at,
                 )
 
-        # 无数据
+        # 无数据：使用硬编码 fallback 价格
         defaults = NATIVE_TOKEN_DEFAULTS.get(chain_id, {})
+        fallback_price = NATIVE_TOKEN_FALLBACK_PRICES.get(chain_id)
+        if fallback_price:
+            logger.debug(
+                f"[TokenPriceCache] 原生代币价格使用硬编码 fallback: "
+                f"chain_id={chain_id}, price=${fallback_price}"
+            )
         return TokenMeta(
             symbol=defaults.get("symbol", "ETH"),
             name=defaults.get("name", ""),
             decimals=defaults.get("decimals", 18),
-            price_usd=None,
+            price_usd=fallback_price,
         )
 
     # ──── Fallback & 工具方法 ────

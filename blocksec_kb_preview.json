@@ -1,0 +1,297 @@
+{
+  "samples": [
+    {
+      "title": "KelpDAO - Compromised Private Key",
+      "description": "KelpDAO security incident; loss ~ $290.00 M; chains: Ethereum; root cause: Compromised Private Key.",
+      "category": "private_key_compromise",
+      "tags": [
+        "blocksec",
+        "compromised_private_key",
+        "ethereum",
+        "security_incident"
+      ],
+      "chain_id": 1,
+      "tx_hash": "0x1ae232da212c45f35c1525f851e4c41d529bf18af862d9ce9fd40bf709db4222",
+      "attacked_address": null,
+      "exploiter_address": null,
+      "alert_data": {
+        "source": "blocksec",
+        "blocksec_id": 433,
+        "project": "KelpDAO",
+        "project_logo": "https://pbs.twimg.com/profile_images/2026633020942499840/7aPfbguV_400x400.jpg",
+        "loss_usd": 290000000.0,
+        "loss_display": "~ $290.00 M",
+        "root_cause": "Compromised Private Key",
+        "event_time": "2026-04-18T17:35:35+00:00",
+        "event_timestamp_ms": 1776533735000,
+        "media_url": "https://x.com/Phalcon_xyz/status/2045728892489757098",
+        "poc_url": "",
+        "rescued_usd": 0.0,
+        "chain_id": 1,
+        "chain_name": "Ethereum",
+        "tx_hash": "0x1ae232da212c45f35c1525f851e4c41d529bf18af862d9ce9fd40bf709db4222",
+        "tx_time": "2026-04-18T17:35:35+00:00",
+        "tx_timestamp_ms": 1776533735000,
+        "attacker": null,
+        "tx_label": "",
+        "raw_incident": {
+          "id": 433,
+          "project": "KelpDAO",
+          "projectLogo": "https://pbs.twimg.com/profile_images/2026633020942499840/7aPfbguV_400x400.jpg",
+          "loss": "290000000.000000",
+          "chainIds": [],
+          "transactions": [
+            {
+              "txnHash": "0x1ae232da212c45f35c1525f851e4c41d529bf18af862d9ce9fd40bf709db4222",
+              "txnHashDate": 1776533735000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            }
+          ],
+          "media": "https://x.com/Phalcon_xyz/status/2045728892489757098",
+          "rootCause": "Compromised Private Key",
+          "date": 1776533735000,
+          "poc": "",
+          "rescued": "0"
+        }
+      },
+      "expected_severity": null,
+      "expected_labels": [
+        "compromised_private_key",
+        "ethereum"
+      ],
+      "expected_min_score": null,
+      "source": "blocksec",
+      "tx_explorer_url": "https://etherscan.io/tx/0x1ae232da212c45f35c1525f851e4c41d529bf18af862d9ce9fd40bf709db4222"
+    },
+    {
+      "title": "Dango - Business Logic Flaw",
+      "description": "Dango security incident; loss ~ $410.00 K; chains: Ethereum; root cause: Business Logic Flaw.",
+      "category": "business_logic",
+      "tags": [
+        "blocksec",
+        "business_logic_flaw",
+        "ethereum",
+        "security_incident"
+      ],
+      "chain_id": 1,
+      "tx_hash": "0x06c2c3109999500fe3a0213bf33c3a1e99e3b6c86b0595d7804e57193bb4d9ae",
+      "attacked_address": null,
+      "exploiter_address": null,
+      "alert_data": {
+        "source": "blocksec",
+        "blocksec_id": 400,
+        "project": "Dango",
+        "project_logo": "https://pbs.twimg.com/profile_images/1940431337912971264/h2G3EAC1_400x400.jpg",
+        "loss_usd": 410000.0,
+        "loss_display": "~ $410.00 K",
+        "root_cause": "Business Logic Flaw",
+        "event_time": "2026-04-13T06:20:47+00:00",
+        "event_timestamp_ms": 1776061247000,
+        "media_url": "https://x.com/dango/status/2043669424805216745?s=20",
+        "poc_url": "",
+        "rescued_usd": 0.0,
+        "chain_id": 1,
+        "chain_name": "Ethereum",
+        "tx_hash": "0x06c2c3109999500fe3a0213bf33c3a1e99e3b6c86b0595d7804e57193bb4d9ae",
+        "tx_time": "2026-04-13T08:53:59+00:00",
+        "tx_timestamp_ms": 1776070439000,
+        "attacker": null,
+        "tx_label": "",
+        "raw_incident": {
+          "id": 400,
+          "project": "Dango",
+          "projectLogo": "https://pbs.twimg.com/profile_images/1940431337912971264/h2G3EAC1_400x400.jpg",
+          "loss": "410000.000000",
+          "chainIds": [],
+          "transactions": [
+            {
+              "txnHash": "0x06c2c3109999500fe3a0213bf33c3a1e99e3b6c86b0595d7804e57193bb4d9ae",
+              "txnHashDate": 1776070439000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x7c846ed31368320f146af1290fceafa75c29ccb33c9c652409823f8b31d071aa",
+              "txnHashDate": 1776068159000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xa7f9754a356277f28661b457aa9c03b007bb9959fec9a7f550e30a530b4eb342",
+              "txnHashDate": 1776068135000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xbf51b9b057c9844efc06463fc16b351c473e9a892012d8c794e08b2af3b55205",
+              "txnHashDate": 1776063851000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xc74ad3c33c267e435fe8d9c7c2f5a6b0ebaf4bdd40da521ee9a0aa24c2b46ec2",
+              "txnHashDate": 1776063731000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x09690b5020c3c92467db96c630959570ac9dc0a0664aa9549017471a4ecde350",
+              "txnHashDate": 1776063683000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x9f0ab90c357ec988bcb74cf92dd6d0fb1f056c4d0eac5dc5611027b382bce190",
+              "txnHashDate": 1776063623000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x2ebfd1cdc40fdcc27b5f56a4d5cc83ac8b841f3ab8270bc12c94871ea0dfc9c8",
+              "txnHashDate": 1776061247000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            }
+          ],
+          "media": "https://x.com/dango/status/2043669424805216745?s=20",
+          "rootCause": "Business Logic Flaw",
+          "date": 1776061247000,
+          "poc": "",
+          "rescued": "0"
+        }
+      },
+      "expected_severity": null,
+      "expected_labels": [
+        "business_logic_flaw",
+        "ethereum"
+      ],
+      "expected_min_score": null,
+      "source": "blocksec",
+      "tx_explorer_url": "https://etherscan.io/tx/0x06c2c3109999500fe3a0213bf33c3a1e99e3b6c86b0595d7804e57193bb4d9ae"
+    },
+    {
+      "title": "Dango - Business Logic Flaw",
+      "description": "Dango security incident; loss ~ $410.00 K; chains: Ethereum; root cause: Business Logic Flaw.",
+      "category": "business_logic",
+      "tags": [
+        "blocksec",
+        "business_logic_flaw",
+        "ethereum",
+        "security_incident"
+      ],
+      "chain_id": 1,
+      "tx_hash": "0x7c846ed31368320f146af1290fceafa75c29ccb33c9c652409823f8b31d071aa",
+      "attacked_address": null,
+      "exploiter_address": null,
+      "alert_data": {
+        "source": "blocksec",
+        "blocksec_id": 400,
+        "project": "Dango",
+        "project_logo": "https://pbs.twimg.com/profile_images/1940431337912971264/h2G3EAC1_400x400.jpg",
+        "loss_usd": 410000.0,
+        "loss_display": "~ $410.00 K",
+        "root_cause": "Business Logic Flaw",
+        "event_time": "2026-04-13T06:20:47+00:00",
+        "event_timestamp_ms": 1776061247000,
+        "media_url": "https://x.com/dango/status/2043669424805216745?s=20",
+        "poc_url": "",
+        "rescued_usd": 0.0,
+        "chain_id": 1,
+        "chain_name": "Ethereum",
+        "tx_hash": "0x7c846ed31368320f146af1290fceafa75c29ccb33c9c652409823f8b31d071aa",
+        "tx_time": "2026-04-13T08:15:59+00:00",
+        "tx_timestamp_ms": 1776068159000,
+        "attacker": null,
+        "tx_label": "",
+        "raw_incident": {
+          "id": 400,
+          "project": "Dango",
+          "projectLogo": "https://pbs.twimg.com/profile_images/1940431337912971264/h2G3EAC1_400x400.jpg",
+          "loss": "410000.000000",
+          "chainIds": [],
+          "transactions": [
+            {
+              "txnHash": "0x06c2c3109999500fe3a0213bf33c3a1e99e3b6c86b0595d7804e57193bb4d9ae",
+              "txnHashDate": 1776070439000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x7c846ed31368320f146af1290fceafa75c29ccb33c9c652409823f8b31d071aa",
+              "txnHashDate": 1776068159000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xa7f9754a356277f28661b457aa9c03b007bb9959fec9a7f550e30a530b4eb342",
+              "txnHashDate": 1776068135000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xbf51b9b057c9844efc06463fc16b351c473e9a892012d8c794e08b2af3b55205",
+              "txnHashDate": 1776063851000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0xc74ad3c33c267e435fe8d9c7c2f5a6b0ebaf4bdd40da521ee9a0aa24c2b46ec2",
+              "txnHashDate": 1776063731000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x09690b5020c3c92467db96c630959570ac9dc0a0664aa9549017471a4ecde350",
+              "txnHashDate": 1776063683000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x9f0ab90c357ec988bcb74cf92dd6d0fb1f056c4d0eac5dc5611027b382bce190",
+              "txnHashDate": 1776063623000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            },
+            {
+              "txnHash": "0x2ebfd1cdc40fdcc27b5f56a4d5cc83ac8b841f3ab8270bc12c94871ea0dfc9c8",
+              "txnHashDate": 1776061247000,
+              "chainId": 1,
+              "attacker": "",
+              "label": ""
+            }
+          ],
+          "media": "https://x.com/dango/status/2043669424805216745?s=20",
+          "rootCause": "Business Logic Flaw",
+          "date": 1776061247000,
+          "poc": "",
+          "rescued": "0"
+        }
+      },
+      "expected_severity": null,
+      "expected_labels": [
+        "business_logic_flaw",
+        "ethereum"
+      ],
+      "expected_min_score": null,
+      "source": "blocksec",
+      "tx_explorer_url": "https://etherscan.io/tx/0x7c846ed31368320f146af1290fceafa75c29ccb33c9c652409823f8b31d071aa"
+    }
+  ]
+}

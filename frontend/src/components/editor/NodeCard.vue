@@ -39,8 +39,8 @@
       <span class="preview-detail">点击详情 &rsaquo;</span>
     </div>
 
-    <!-- Port anchors (positioned absolutely on sides) -->
-    <template v-for="(port, idx) in inputPorts" :key="'in-'+port.key">
+    <!-- Required input port anchors -->
+    <template v-for="(port, idx) in requiredInputPorts" :key="'in-'+port.key">
       <div class="port-anchor input-port-anchor"
            :style="{ top: inputPortY(idx) + 'px' }"
            :data-port-key="port.key" data-port-side="left"
@@ -83,6 +83,17 @@
         </transition>
       </div>
     </template>
+
+    <!-- Optional input port anchors (dashed, placed after input panels) -->
+    <div v-if="optionalInputPorts.length > 0" class="optional-port-row">
+      <template v-for="port in optionalInputPorts" :key="'in-opt-'+port.key">
+        <div class="port-anchor input-port-anchor optional-port-anchor"
+             :data-port-key="port.key" data-port-side="left"
+             :title="port.description ? (port.label + '：' + port.description) : ('可选输入端口 - ' + port.label)"
+             @mousedown.stop="$emit('portDrag', $event, node, port.key, 'left')"
+        ></div>
+      </template>
+    </div>
 
     <!-- ═══ OUTPUT DATA PANELS (per-port) ═══ -->
     <template v-for="(group, idx) in outputPortGroups" :key="'out-group-'+idx">
@@ -159,7 +170,7 @@ const nodeType = computed(() => nodeTypesStore.getByName(props.node.type))
 /** 节点分类 class 名称 */
 const categoryClass = computed(() => {
   const cat = nodeType.value?.category || 'detection'
-  return { input: 'trigger', provider: 'provider', detection: 'detection', logic: 'logic', action: 'action', memory: 'memory', scripting: 'scripting' }[cat] || 'detection'
+  return { input: 'trigger', provider: 'provider', detection: 'detection', logic: 'logic', action: 'action', memory: 'memory', scripting: 'scripting', storage: 'storage' }[cat] || 'detection'
 })
 
 const nodeStyle = computed(() => ({
@@ -247,6 +258,9 @@ const inputPorts = computed(() => {
   }
   return definedInputs
 })
+
+const requiredInputPorts = computed(() => inputPorts.value.filter(p => p.required !== false))
+const optionalInputPorts = computed(() => inputPorts.value.filter(p => p.required === false))
 
 const outputPorts = computed(() => nodeType.value?.outputs || []) // 仅用于回退（outputPortGroups 为空时）
 
@@ -492,6 +506,7 @@ watch(nodeType, () => { initCollapsedState() }, { immediate: true })
 .header-action     { background: linear-gradient(135deg, rgba(245,158,11,0.14), rgba(245,158,11,0.06)); }
 .header-memory     { background: linear-gradient(135deg, rgba(139,92,246,0.14), rgba(139,92,246,0.06)); }
 .header-scripting  { background: linear-gradient(135deg, rgba(34,197,94,0.14), rgba(34,197,94,0.06)); }
+.header-storage    { background: linear-gradient(135deg, rgba(5,150,105,0.14), rgba(5,150,105,0.06)); }
 
 .node-header-icon {
   width: 26px; height: 26px; border-radius: 7px;
@@ -505,6 +520,7 @@ watch(nodeType, () => { initCollapsedState() }, { immediate: true })
 .cat-action .node-header-icon     { background: rgba(245,158,11,0.18); }
 .cat-memory .node-header-icon     { background: rgba(139,92,246,0.18); }
 .cat-scripting .node-header-icon  { background: rgba(34,197,94,0.18); }
+.cat-storage .node-header-icon    { background: rgba(5,150,105,0.18); }
 
 .node-header-label {
   font-size: 12.5px; font-weight: 600; color: #e2e8f0;
@@ -520,6 +536,7 @@ watch(nodeType, () => { initCollapsedState() }, { immediate: true })
 .badge-action     { background: rgba(245,158,11,0.16); color: #fbbf24; }
 .badge-memory     { background: rgba(139,92,246,0.16); color: #a78bfa; }
 .badge-scripting  { background: rgba(34,197,94,0.16); color: #4ade80; }
+.badge-storage     { background: rgba(5,150,105,0.16); color: #34d399; }
 
 /* Test button */
 .node-test-btn {
@@ -572,6 +589,22 @@ watch(nodeType, () => { initCollapsedState() }, { immediate: true })
 .input-port-anchor { left: -7px; border-color: #22c55e; }
 .input-port-anchor::after { background: #22c55e; }
 .input-port-anchor:hover { transform: translateY(-50%) scale(1.3); box-shadow: 0 0 12px rgba(34,197,94,0.35); }
+
+.optional-port-anchor { border-style: dashed; border-color: #22c55e; }
+.optional-port-anchor::after { background: #22c55e; }
+.optional-port-anchor:hover { box-shadow: 0 0 12px rgba(34,197,94,0.35); }
+
+.optional-port-row {
+  position: relative;
+  height: 20px;
+  margin: 0 6px;
+}
+.optional-port-row .port-anchor {
+  position: absolute;
+  left: -13px;
+  top: 50%;
+  transform: translateY(-50%);
+}
 
 .output-port-anchor { right: -7px; left: auto; border-color: #f59e0b; }
 .output-port-anchor::after { background: #f59e0b; }

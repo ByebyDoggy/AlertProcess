@@ -363,6 +363,17 @@ export const useChainDataStore = defineStore('chainData', () => {
   function clearCanvas() {
     nodes.value = []
     edges.value = []
+    markDirty()
+  }
+
+  function applyDraft(draft) {
+    chainName.value = draft.name || chainName.value || 'AI 生成规则链'
+    chainDescription.value = draft.description || chainDescription.value || ''
+    nodes.value = deepClone(draft.nodes || [])
+    edges.value = deepClone(draft.edges || [])
+    currentChainId.value = null
+    clearAllTestResults()
+    markDirty()
   }
 
   return {
@@ -374,7 +385,7 @@ export const useChainDataStore = defineStore('chainData', () => {
     addNode, removeNode, updateNode, updateNodeConfig, updateNodePosition,
     duplicateNodes, markDirty,
     addEdge, removeEdge, updateEdge,
-    save, deleteChain, clearCanvas, toggleChainEnabled,
+    save, deleteChain, clearCanvas, applyDraft, toggleChainEnabled,
     // 节点测试
     nodeTestResults, nodeTestInputs,
     setNodeTestResult, clearNodeTestResult, clearAllTestResults,

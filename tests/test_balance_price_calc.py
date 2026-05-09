@@ -3,12 +3,10 @@ compute_balance_changes 价格计算集成测试
 =========================================
 使用 mock 的 TokenPriceCache 测试余额变化中的 USD 估值逻辑
 """
-import time
 import pytest
 
 from detectors.trace.analyzer import TxTraceAnalyzer, _format_eth_change
 from detectors.trace.models import CallNode, BalanceChangeItem
-from detectors.trace.token_price_cache import TokenMeta, TokenPriceCache
 
 
 class TestFormatEthChange:
@@ -42,59 +40,9 @@ class TestComputeBalanceChangesPriceCalculation:
         return TxTraceAnalyzer()
 
     @pytest.fixture
-    def mock_price_cache(self):
+    def mock_price_cache(self, mock_external_services):
         """创建预填充的 mock 价格缓存"""
-        cache = TokenPriceCache(market_db_url="http://localhost:99999")
-        cache.enabled = False  # 禁用远程
-
-        # 手动填充缓存数据
-        usdt_meta = TokenMeta(
-            symbol="USDT",
-            name="Tether USD",
-            decimals=6,
-            price_usd=1.0,
-            logo_url="https://example.com/usdt.png",
-            fetched_at=time.time(),
-        )
-        weth_meta = TokenMeta(
-            symbol="WETH",
-            name="Wrapped Ether",
-            decimals=18,
-            price_usd=3499.50,
-            logo_url="https://example.com/weth.png",
-            fetched_at=time.time(),
-        )
-        usdc_meta = TokenMeta(
-            symbol="USDC",
-            name="USD Coin",
-            decimals=6,
-            price_usd=1.0,
-            logo_url="https://example.com/usdc.png",
-            fetched_at=time.time(),
-        )
-        uni_meta = TokenMeta(
-            symbol="UNI",
-            name="Uniswap",
-            decimals=18,
-            price_usd=7.25,
-            fetched_at=time.time(),
-        )
-        eth_meta = TokenMeta(
-            symbol="ETH",
-            name="Ethereum",
-            decimals=18,
-            price_usd=3500.0,
-            logo_url="https://example.com/eth.png",
-            fetched_at=time.time(),
-        )
-
-        cache._cache["1:0xdac17f958d2ee523a2206206994597c13d831ec7"] = usdt_meta
-        cache._cache["1:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"] = weth_meta
-        cache._cache["1:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"] = usdc_meta
-        cache._cache["1:0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"] = uni_meta
-        cache._cache["1:"] = eth_meta  # 原生代币
-
-        return cache
+        return mock_external_services.token_prices
 
     @pytest.mark.asyncio
     async def test_eth_price_calculation_in_balance(self, analyzer, mock_price_cache, monkeypatch):
@@ -231,9 +179,9 @@ class TestComputeBalanceChangesPriceCalculation:
         """测试无价格时 USD 估值为 0.0"""
         from detectors.trace import token_price_cache as tpc_module
 
-        # 创建空缓存（无价格数据）
-        empty_cache = TokenPriceCache(market_db_url="http://localhost:99999")
-        empty_cache.enabled = False
+        from tests.mocks import MockTokenPriceCache
+
+        empty_cache = MockTokenPriceCache()
 
         original_cache = tpc_module._global_cache
         tpc_module._global_cache = empty_cache

@@ -178,22 +178,43 @@ class MoralisAddressProviderNode(BaseContextProviderNode):
         chain_id: int,
         api_key: str,
     ) -> dict[str, Any]:
-        """调用 Moralis API"""
+        """调用 Moralis API（自动记录 stats 到 apipool）"""
         import httpx
+        import time as _time
 
         chain_name = CHAIN_MAP.get(chain_id, "eth")
         url = f"https://deep-index.moralis.io/api/v2.2/wallets/{address}/chains"
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                url,
-                headers={
-                    "accept": "application/json",
-                    "X-API-Key": api_key,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        t0 = _time.monotonic()
+        is_rate_limit = False
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "accept": "application/json",
+                        "X-API-Key": api_key,
+                    },
+                )
+
+                # 检测速率限制
+                if resp.status_code == 429:
+                    is_rate_limit = True
+                    resp.raise_for_status()
+
+                resp.raise_for_status()
+                data = resp.json()
+
+            # 记录成功
+            latency = _time.monotonic() - t0
+            self._record_moralis_call(api_key, success=True, latency=latency, method="wallet_chains")
+
+        except Exception as e:
+            latency = _time.monotonic() - t0
+            self._record_moralis_call(api_key, success=False, latency=latency,
+                                      method="wallet_chains", is_rate_limit=is_rate_limit)
+            raise
 
         active_chains = data.get("active_chains") or []
 
@@ -243,6 +264,24 @@ class MoralisAddressProviderNode(BaseContextProviderNode):
         if first_block_number is not None:
             result["first_block_number"] = first_block_number
         return result
+
+    @staticmethod
+    def _record_moralis_call(api_key: str, success: bool, latency: float,
+                             method: str = "call", is_rate_limit: bool = False) -> None:
+        """记录一次 Moralis API 调用到 apipool StatsCollector"""
+        try:
+            from nodes.context.providers.moralis_key_pool import get_moralis_key_pool
+            mgr = get_moralis_key_pool()
+            if mgr is not None and mgr.stats is not None:
+                mgr.record_call(
+                    api_key=api_key,
+                    success=success,
+                    latency=latency,
+                    method=method,
+                    is_rate_limit=is_rate_limit,
+                )
+        except Exception as e:
+            logger.debug(f"[MoralisProviderNode] Failed to record stats: {e}")
 
 
 NodeRegistry.register(MoralisAddressProviderNode)

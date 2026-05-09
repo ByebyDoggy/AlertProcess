@@ -11,6 +11,8 @@ from nodes.detectors.price_manipulation import (
     PriceManipulationDetector,
     detect_intra_block_price_deviation,
     detect_swap_to_drain,
+    detect_pool_repeated_swap_pressure,
+    detect_price_deviation_followed_by_drain,
     SwapEvent,
     TransferEvent,
     scan_logs,
@@ -292,6 +294,36 @@ class TestDetectSwapToDrain:
         assert len(patterns) >= 1
 
 
+class TestDetectSwapPressureAndChainedDrain:
+
+    def test_repeated_swap_pressure_detected(self):
+        swaps = [
+            _make_swap_event(2 * 10**18, -1000 * 10**6, log_index=10),
+            _make_swap_event(3 * 10**18, -1500 * 10**6, log_index=20),
+            _make_swap_event(4 * 10**18, -2000 * 10**6, log_index=30),
+        ]
+        score, details = detect_pool_repeated_swap_pressure(swaps)
+        assert score > 0
+        assert details[0]["same_direction_run"] >= 2
+
+    def test_price_deviation_followed_by_drain_detected(self):
+        deviations = [{
+            "pool": POOL_ADDR,
+            "second_log_index": 20,
+            "price_deviation_pct": 35.0,
+        }]
+        drains = [{
+            "pool": POOL_ADDR,
+            "transfer_log_index": 30,
+            "to": ATTACKER.lower(),
+            "amount": 454_169 * 10**6,
+        }]
+        score, details = detect_price_deviation_followed_by_drain(deviations, drains)
+        assert score > 0
+        assert len(details) == 1
+        assert details[0]["drain_to"] == ATTACKER.lower()
+
+
 # ---------------------------------------------------------------------------
 # scan_logs 集成测试
 # ---------------------------------------------------------------------------
@@ -339,3 +371,25 @@ class TestNegativeCases:
 
         std_score, _ = detect_swap_to_drain(swaps, transfers, ATTACKER)
         assert std_score == 0.0
+
+    @pytest.mark.asyncio
+    async def test_detector_outputs_chained_signals(self):
+        sqrt_price_before = 91936095398893916031247961774682953
+        sqrt_price_after = 112578944575196385274561939615952319
+        logs = [
+            _make_v3_swap_log(1_798 * 10**18, -1_212_462 * 10**6, sqrt_price_x96=sqrt_price_before, log_index=10),
+            _make_v3_swap_log(2_000 * 10**18, -1_300_000 * 10**6, sqrt_price_x96=sqrt_price_after, log_index=20),
+            _make_transfer_log(POOL_ADDR, ATTACKER, 454_169 * 10**6, log_index=30),
+        ]
+        det = PriceManipulationDetector(node_id="d1")
+        from nodes.detectors.base import DetectorInputMixin
+        tx = DetectorInputMixin(
+            from_address=ATTACKER,
+            to_address=POOL_ADDR,
+            chain_id=1,
+            logs=logs,
+        )
+        output = await det.process(tx)
+        assert "PRICE_DEVIATION_WITH_DRAIN" in output.detection["signals"]
+        assert "PRICE_MANIPULATION_ATTACK" in output.detection["signals"]
+

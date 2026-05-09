@@ -7,6 +7,7 @@ from routers.rule_chain.router import ruleChainRouter
 from routers.knowledge_base import knowledgeBaseRouter
 from routers.detectors import trace_router, ingest_router
 from routers.pool_config.pool_config_router import poolConfigRouter
+from routers.system_config import systemConfigRouter
 from database.models import SessionLocal
 from config import settings
 import os
@@ -57,6 +58,7 @@ app.include_router(knowledgeBaseRouter)
 app.include_router(trace_router)
 app.include_router(ingest_router)
 app.include_router(poolConfigRouter)
+app.include_router(systemConfigRouter)
 
 
 # ──────────────── 启动时加载预置知识库样本 ────────────────
@@ -183,7 +185,7 @@ if os.path.isdir(frontend_dist):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """SPA fallback: 返回 index.html 对所有非 API 路径"""
-        if full_path.startswith(("alert", "rule-chain", "knowledge-base", "detectors", "pool-config")):
+        if full_path.startswith(("alert", "rule-chain", "knowledge-base", "detectors", "pool-config", "system")):
             return {"detail": "Not Found"}
         file_path = os.path.join(frontend_dist, full_path)
         if os.path.isfile(file_path):

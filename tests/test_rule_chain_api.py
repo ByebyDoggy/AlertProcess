@@ -270,16 +270,140 @@ class TestRuleChainAPI:
                 {"id": "edge_1", "source": "cond_1", "target": "action_1", "label": "匹配"}
             ]
         }
-        
+
         response = client.post(
             "/rule-chain/",
             headers=get_auth_headers(),
             json=chain_data
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["chain_config"]["nodes"][0]["config"]["field"] == "detector.flash_loan.detected"
+
+    def test_validate_returns_structured_errors(self):
+        """Test validation returns machine-readable errors and normalized config"""
+        response = client.post(
+            "/rule-chain/validate",
+            headers=get_auth_headers(),
+            json={
+                "nodes": [{"id": "bad_1", "type": "missing_detector", "label": "Missing"}],
+                "edges": [],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is False
+        assert data["normalized_config"]["nodes"][0]["type"] == "missing_detector"
+        assert data["stats"]["node_count"] == 1
+        assert any(error["code"] == "UNKNOWN_NODE_TYPE" for error in data["errors"])
+        first_error = data["errors"][0]
+        assert first_error["severity"] == "error"
+        assert first_error["field_path"]
+        assert "suggestion" in first_error
+
+    def test_ai_generate_returns_generation_meta_on_provider_error(self, monkeypatch):
+        from services.ai.client import AIClientError
+
+        async def fake_generate_rule_chain_draft(**kwargs):
+            return {
+                "draft": {"name": "AI 生成规则链", "description": "", "nodes": [], "edges": []},
+                "validation": {"valid": True, "errors": [], "warnings": [], "normalized_config": {"nodes": [], "edges": []}, "stats": {"node_count": 0, "edge_count": 0, "trigger_count": 0, "error_count": 0, "warning_count": 0}},
+                "explanation": "ok",
+                "assumptions": [],
+                "generation_meta": {"mode": kwargs["mode"], "model": "mock-model", "used_current_chain": False},
+            }
+
+        monkeypatch.setattr("services.ai.rule_chain_generator.generate_rule_chain_draft", fake_generate_rule_chain_draft)
+        response = client.post(
+            "/rule-chain/ai/generate",
+            headers=get_auth_headers(),
+            json={
+                "prompt": "生成一个检测高 gas 的规则链",
+                "mode": "new",
+                "current_chain": {"nodes": [], "edges": []},
+                "constraints": {"allow_actions": True},
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["generation_meta"]["mode"] == "new"
+        assert data["generation_meta"]["model"] == "mock-model"
+        assert data["generation_meta"]["used_current_chain"] is False
+
+    def test_validate_accepts_standard_port_aliases(self):
+        """Test validation normalizes camelCase and snake_case port fields"""
+        response = client.post(
+            "/rule-chain/validate",
+            headers=get_auth_headers(),
+            json={
+                "nodes": [
+                    {"id": "trigger_1", "type": "alert_trigger", "label": "Trigger"},
+                    {"id": "gas_1", "type": "gas_price_detector", "label": "Gas"},
+                ],
+                "edges": [
+                    {
+                        "id": "edge_1",
+                        "source": "trigger_1",
+                        "source_port": "output",
+                        "target": "gas_1",
+                        "target_port": "input",
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert data["errors"] == []
+        assert data["normalized_config"]["edges"][0]["sourcePort"] == "output"
+        assert data["normalized_config"]["edges"][0]["targetPort"] == "input"
+
+    def test_mcp_schema_endpoint(self):
+        """Test MCP schema bundle exposes construction contract"""
+        response = client.get("/rule-chain/schema/mcp")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "standard_payload" in data
+        assert "nodes" in data
+        assert "connection_rules" in data
+        assert data["endpoints"]["validate"] == "POST /rule-chain/validate"
+        assert any(node["name"] == "alert_trigger" for node in data["nodes"])
+
+    def test_ai_generate_returns_validated_draft(self, monkeypatch):
+        """Test AI generation endpoint validates the model draft before returning"""
+        async def fake_generate_rule_chain_draft(**kwargs):
+            return {
+                "draft": {
+                    "name": "test_ai_chain",
+                    "description": "Generated",
+                    "nodes": [{"id": "trigger_1", "type": "alert_trigger", "label": "Trigger", "config": {}, "position": {"x": 0, "y": 0}}],
+                    "edges": [],
+                },
+                "validation": {"valid": True, "errors": [], "warnings": [], "normalized_config": {}, "stats": {"node_count": 1}},
+                "explanation": "Generated a trigger-only chain.",
+                "assumptions": ["No detector requested"],
+            }
+
+        monkeypatch.setattr(
+            "services.ai.rule_chain_generator.generate_rule_chain_draft",
+            fake_generate_rule_chain_draft,
+        )
+        response = client.post(
+            "/rule-chain/ai/generate",
+            headers=get_auth_headers(),
+            json={"prompt": "create a trigger chain", "mode": "new"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["draft"]["name"] == "test_ai_chain"
+        assert data["validation"]["valid"] is True
 
 
 def run_tests():

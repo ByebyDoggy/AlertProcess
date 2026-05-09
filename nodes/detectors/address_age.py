@@ -20,10 +20,10 @@ def _get_reference_time(tx_context: TransactionContext) -> datetime:
     获取参考时间（用于回测）。
 
     优先级:
-      1. tx_context.timestamp — 交易发生时间
+      1. tx_context.timestamp / tx_timestamp — 交易发生时间
       2. datetime.now() — 实时检测回退到系统当前时间
     """
-    ts_val = tx_context.timestamp
+    ts_val = tx_context.timestamp or tx_context.extra.get("tx_timestamp")
     if not ts_val:
         return datetime.now(timezone.utc)
     try:
@@ -40,7 +40,7 @@ def _get_reference_time(tx_context: TransactionContext) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def _estimate_age_by_blocks(tx_context: TransactionContext) -> int | None:
+def _estimate_age_by_blocks(tx_context: TransactionContext | dict[str, Any]) -> int | None:
     """
     基于区块差估算地址年龄（天数）。
 
@@ -49,19 +49,31 @@ def _estimate_age_by_blocks(tx_context: TransactionContext) -> int | None:
     Returns:
         年龄天数(int)，如果无法估算返回 None
     """
-    first_block_raw = tx_context.extra.get("first_block_number")
-    if first_block_raw is None:
+    if isinstance(tx_context, dict):
+        raw = tx_context
+        first_block_raw = raw.get("first_block_number")
+        tx_block_raw = raw.get("block_number")
+        chain_id_raw = raw.get("chain_id", 1)
+    else:
+        first_block_raw = tx_context.extra.get("first_block_number")
+        tx_block_raw = tx_context.block_number
+        chain_id_raw = tx_context.chain_id or 1
+
+    if first_block_raw is None or tx_block_raw is None:
         return None
     try:
         first_block = int(first_block_raw)
+        tx_block = int(tx_block_raw)
     except (ValueError, TypeError):
         return None
 
-    tx_block = tx_context.block_number
     if tx_block <= first_block:
         return None
 
-    chain_id = tx_context.chain_id or 1
+    try:
+        chain_id = int(chain_id_raw or 1)
+    except (ValueError, TypeError):
+        chain_id = 1
 
     from nodes.context.providers.moralis_address import get_block_time
     block_sec = get_block_time(chain_id)
@@ -94,7 +106,7 @@ class AddressAgeDetector(BaseDetector):
 
     name: str = "address_age_detector"
     label: str = "地址年龄检测"
-    description: str = "检测交易涉及的新建地址风险：通过 MoralisAddressProviderNode 预先填充地址年龄数据，<1 天给 90 分，< 阈值天数给 70 分"
+    description: str = "[数据需求: 仅交易基础字段] 检测交易涉及的新建地址风险：通过 MoralisAddressProviderNode 预先填充地址年龄数据，<1 天给 90 分，< 阈值天数给 70 分"
     icon: str = "\U0001f4c5"
     color: str = "#14b8a6"
 

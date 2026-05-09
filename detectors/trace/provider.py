@@ -308,11 +308,11 @@ class MultiRpcClient:
                     err_msg = str(e).lower()
                     is_method_err = any(kw in err_msg for kw in [
                         "method not found", "-32601", "not supported",
-                        "does not support", "tracing",
+                        "does not support", "tracing", "not allowed to access method", "-32053",
                     ])
                     if is_method_err:
                         logger.debug(
-                            f"[TRACE] Node returned 'method not found' for trace_transaction "
+                            f"[TRACE] Node does not support trace_transaction "
                             f"(chain={chain_id}, attempt={attempt + 1}), trying next node..."
                         )
                         continue
@@ -354,11 +354,11 @@ class MultiRpcClient:
                     err_msg = str(e).lower()
                     is_method_err = any(kw in err_msg for kw in [
                         "method not found", "-32601", "not supported",
-                        "does not support", "tracing",
+                        "does not support", "tracing", "not allowed to access method", "-32053",
                     ])
                     if is_method_err:
                         logger.debug(
-                            f"[TRACE] Node returned 'method not found' for debug_traceTransaction "
+                            f"[TRACE] Node does not support debug_traceTransaction "
                             f"(chain={chain_id}, attempt={attempt + 1}), trying next node..."
                         )
                         continue

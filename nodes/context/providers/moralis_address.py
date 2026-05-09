@@ -342,9 +342,10 @@ class MoralisAddressProvider(ContextProvider):
           }
 
         first_transaction 字段为 Unix 时间戳（整数），直接转换为地址创建时间。
-        使用 httpx 异步 HTTP 客户端。
+        使用 httpx 异步 HTTP 客户端。每次调用后自动记录 stats 到 apipool。
         """
         import httpx
+        import time as _time
 
         chain_name = CHAIN_MAP.get(chain_id, "eth")
         # 官方文档端点：Wallet Chain Activity
@@ -353,22 +354,48 @@ class MoralisAddressProvider(ContextProvider):
         key_preview = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "***"
         logger.info(f"[MoralisAddress] GET {url} (key={key_preview}, chain={chain_name})")
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                url,
-                headers={
-                    "accept": "application/json",
-                    "X-API-Key": api_key,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        t0 = _time.monotonic()
+        is_rate_limit = False
+        call_success = False
+        data = None
 
-            logger.info(
-                f"[MoralisAddress] Response {resp.status_code}: "
-                f"top_keys={list(data.keys())[:8]}"
-            )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "accept": "application/json",
+                        "X-API-Key": api_key,
+                    },
+                )
 
+                # 检测速率限制 (Moralis 返回 429)
+                if resp.status_code == 429:
+                    is_rate_limit = True
+                    resp.raise_for_status()
+
+                resp.raise_for_status()
+                data = resp.json()
+
+                logger.info(
+                    f"[MoralisAddress] Response {resp.status_code}: "
+                    f"top_keys={list(data.keys())[:8]}"
+                )
+
+            call_success = True
+
+        except Exception as e:
+            latency = _time.monotonic() - t0
+            # 记录失败事件到 stats
+            self._record_moralis_call(api_key, success=False, latency=latency,
+                                      method="wallet_chains", is_rate_limit=is_rate_limit)
+            raise
+
+        # 记录成功事件到 stats
+        latency = _time.monotonic() - t0
+        self._record_moralis_call(api_key, success=True, latency=latency, method="wallet_chains")
+
+        # ── 解析响应 ──
         # 实际 API 响应格式 (2026-04):
         # {
         #   "address": "0x...",
@@ -440,6 +467,24 @@ class MoralisAddressProvider(ContextProvider):
             f"chain_info keys={list(chain_info.keys())[:6]}"
         )
         return {}
+
+    @staticmethod
+    def _record_moralis_call(api_key: str, success: bool, latency: float,
+                             method: str = "call", is_rate_limit: bool = False) -> None:
+        """记录一次 Moralis API 调用到 apipool StatsCollector"""
+        try:
+            from nodes.context.providers.moralis_key_pool import get_moralis_key_pool
+            mgr = get_moralis_key_pool()
+            if mgr is not None and mgr.stats is not None:
+                mgr.record_call(
+                    api_key=api_key,
+                    success=success,
+                    latency=latency,
+                    method=method,
+                    is_rate_limit=is_rate_limit,
+                )
+        except Exception as e:
+            logger.debug(f"[MoralisAddress] Failed to record stats: {e}")
 
     @staticmethod
     def _extract_first_transaction(data: dict[str, Any]) -> int | None:

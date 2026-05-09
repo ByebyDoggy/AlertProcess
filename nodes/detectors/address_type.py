@@ -37,7 +37,7 @@ class AddressTypeDetector(BaseDetector):
         check_null_from: bool = Field(default=True, description="检测 null 'from' 地址")
         check_contract_creation: bool = Field(default=True, description="检测合约创建模式")
 
-    description: str = "检测可疑地址类型：null 地址转账（合约创建/销毁）、携带 ETH 的合约创建（85 分）、null 来源地址（90 分）。常用于识别部署攻击合约或资金销毁操作"
+    description: str = "[数据需求: 仅交易基础字段] 检测可疑地址类型：null 地址转账（合约创建/销毁）、携带 ETH 的合约创建（85 分）、null 来源地址（90 分）。常用于识别部署攻击合约或资金销毁操作"
     icon: str = "\U0001f3e0"
     color: str = "#8b5cf6"
 

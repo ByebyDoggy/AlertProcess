@@ -37,7 +37,7 @@ class ARKMLabelDetector(BaseDetector):
 
     name: str = "arkm_label_detector"
     label: str = "ARKM 标签检测"
-    description: str = "通过 ARKM Intelligence 实体标签库检测恶意实体：黑名单类型（如 hacker）直接给 95 分，已知实体 20 分。需连接 ARKMLabelProviderNode 节点"
+    description: str = "[数据需求: 仅交易基础字段] 通过 ARKM Intelligence 实体标签库检测恶意实体：黑名单类型（如 hacker）直接给 95 分，已知实体 20 分。需连接 ARKMLabelProviderNode 节点"
     icon: str = "\U0001f50d"
     color: str = "#7c3aed"
 
