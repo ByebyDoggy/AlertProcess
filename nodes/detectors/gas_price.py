@@ -28,7 +28,7 @@ class GasPriceDetector(BaseDetector):
 
     name: str = "gas_price_detector"
     label: str = "Gas 价格检测"
-    description: str = "检测交易 Gas 费用是否异常高（如抢 Front-run 或攻击行为）。根据 gas_price × gas_used 计算 USD 成本，支持多链原生代币价格映射，极端 Gas 给 95 分"
+    description: str = "[数据需求: 仅交易基础字段] 检测交易 Gas 费用是否异常高（如抢 Front-run 或攻击行为）。根据 gas_price × gas_used 计算 USD 成本，支持多链原生代币价格映射，极端 Gas 给 95 分"
     category_var: Any = None  # 使用基类的 category
     icon: str = "\u26fd"
     color: str = "#f59e0b"
@@ -37,10 +37,6 @@ class GasPriceDetector(BaseDetector):
     class ConfigModel(DetectorConfigMixin):
         high_gas_threshold_usd: float = Field(default=100.0, ge=0, description="高 Gas 阈值（USD）")
         extreme_gas_threshold_usd: float = Field(default=500.0, ge=0, description="极端 Gas 阈值（USD）")
-        chain_id_to_native_token_price: dict[str, float] = Field(
-            default={1: 2000.0, 56: 700.0, 137: 1.0},
-            description="原生代币价格映射（chain_id -> USD）",
-        )
 
         @model_validator(mode='after')
         def _check_thresholds(self):
@@ -64,12 +60,19 @@ class GasPriceDetector(BaseDetector):
             if gas_price_wei == 0:
                 return GasPriceOutput(
                     score=0.0, passed=True, severity="UNKNOWN", labels=[],
-                    detection={"error": "gas_price not available in context"}
+                    detection={"error": "gas_price not available in context"},
+                    logs=["gas_price 为 0，跳过检测"],
                 )
 
         chain_id = input.chain_id or 1
-        price_map = self.config.get("chain_id_to_native_token_price", {})
-        native_price = price_map.get(str(chain_id), price_map.get(chain_id, 0))
+
+        # 优先使用 TokenPriceProvider 提供的原生代币价格
+        token_prices = self.get_token_prices(input)
+        native_price = token_prices.get("", 0.0)  # 空字符串 key 表示原生代币
+
+        # 如果 Provider 没有提供原生代币价格，回退到 token_price_instance
+        if native_price == 0.0:
+            native_price = self.token_price_instance.get_price(chain_id, "") or 0.0
 
         # 计算 total gas cost in USD
         total_gas_eth = (gas_price_wei * gas_used) / 10**18
