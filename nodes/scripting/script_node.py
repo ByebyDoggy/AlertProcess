@@ -42,7 +42,8 @@ from typing import Any
 from pydantic import BaseModel, Field, ConfigDict
 
 from nodes.base import BaseNode, NodeCategory, NodeOutput, PortDef, NodeRegistry
-from nodes.scripting.sandbox import execute_script, ScriptTimeoutError, ScriptSecurityError
+from engine.script_context import ScriptContext
+from engine.script_sandbox import ScriptSandbox
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,11 @@ class ScriptNode(BaseNode):
             if o.context:
                 correlation_ctx.update(o.context)
 
+        script_context = ScriptContext(merged_ctx, inputs)
         variables: dict[str, Any] = {
+            "context": script_context,
+            "script_context": script_context,
+            "tx": script_context.tx_context,
             # 全部输入
             "inputs": all_outputs,
             "scores": scores,
@@ -193,10 +198,11 @@ class ScriptNode(BaseNode):
             )
 
         try:
-            result_vars = execute_script(script, variables, timeout=timeout)
-        except (ScriptTimeoutError, ScriptSecurityError) as e:
+            sandbox = ScriptSandbox(timeout=timeout)
+            execution_result = await sandbox.execute_async(script, variables, return_namespace=True)
+        except Exception as e:
             error_msg = str(e)
-            logger.warning(f"[ScriptNode] Execution blocked: {error_msg}")
+            logger.warning(f"[ScriptNode] Execution failed: {error_msg}")
             return NodeOutput(
                 node_id=self.node_id,
                 node_type=self.category.value,
@@ -205,19 +211,28 @@ class ScriptNode(BaseNode):
                 context={"error": error_msg, "script": script},
             )
 
-        # ── 提取结果 ──
-        exec_error = result_vars.get("_error")
-        if exec_error:
+        if not execution_result.get("success"):
+            exec_error = execution_result.get("error") or "脚本执行失败"
             logger.warning(f"[ScriptNode] Execution error: {exec_error}")
             return NodeOutput(
                 node_id=self.node_id,
                 node_type=self.category.value,
                 score=0.0,
                 passed=False,
-                context={"error": exec_error, "stdout": result_vars.get("_stdout", "")},
+                context={"error": exec_error, "script": script},
             )
 
-        # 读取用户设置的输出变量
+        script_result = execution_result.get("result")
+        if isinstance(script_result, dict) and isinstance(script_result.get("result"), dict):
+            result_vars = script_result["result"]
+        elif isinstance(script_result, dict) and any(
+            key in script_result for key in ("score", "labels", "ctx_output", "passed")
+        ):
+            result_vars = script_result
+        else:
+            result_vars = script_result if isinstance(script_result, dict) else {"result": script_result}
+
+        # ── 提取结果 ──
         result_bool = bool(result_vars.get("result", result_vars.get("passed", True)))
         result_score = float(result_vars.get("score", 100.0 if result_bool else 0.0))
         result_labels = result_vars.get("labels", [])
@@ -228,7 +243,9 @@ class ScriptNode(BaseNode):
         result_score = max(0.0, min(100.0, result_score))
 
         # stdout（调试用）
-        stdout_text = result_vars.get("_stdout", "")
+        stdout_text = result_vars.get("stdout", result_vars.get("_stdout", ""))
+        if not stdout_text:
+            stdout_text = str(execution_result.get("execution_time_ms", 0.0)) + "ms"
 
         # ── 提取脚本对 ctx 的自定义修改 ──
         script_ctx = result_vars.get("ctx")

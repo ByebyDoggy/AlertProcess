@@ -28,6 +28,7 @@ import logging
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -173,11 +174,16 @@ class ScriptSandbox:
         self.timeout = timeout or self.DEFAULT_TIMEOUT
         self.memory_limit_mb = memory_limit_mb or self.DEFAULT_MEMORY_LIMIT_MB
         self.memory_limit_bytes = self.memory_limit_mb * 1024 * 1024
+        self._executor = self._create_executor()
+
+    def _create_executor(self) -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="script-sandbox")
 
     def execute(
         self,
         script_code: str,
         context: dict[str, Any] | None = None,
+        return_namespace: bool = False,
     ) -> dict[str, Any]:
         """
         同步执行脚本（阻塞式）。
@@ -201,20 +207,21 @@ class ScriptSandbox:
             if loop.is_running():
                 # 如果已经在事件循环中，创建新的任务
                 return asyncio.create_task(
-                    self.execute_async(script_code, context)
+                    self.execute_async(script_code, context, return_namespace=return_namespace)
                 )
             else:
                 return loop.run_until_complete(
-                    self.execute_async(script_code, context)
+                    self.execute_async(script_code, context, return_namespace=return_namespace)
                 )
         except RuntimeError:
             # 没有事件循环，创建新的
-            return asyncio.run(self.execute_async(script_code, context))
+            return asyncio.run(self.execute_async(script_code, context, return_namespace=return_namespace))
 
     async def execute_async(
         self,
         script_code: str,
         context: dict[str, Any] | None = None,
+        return_namespace: bool = False,
     ) -> dict[str, Any]:
         """
         异步执行脚本（非阻塞）。
@@ -265,7 +272,7 @@ class ScriptSandbox:
         # 5. 使用 asyncio.wait_for 实现超时控制
         try:
             result = await asyncio.wait_for(
-                self._execute_in_sandbox(script_code, safe_globals),
+                self._execute_in_sandbox(script_code, safe_globals, return_namespace=return_namespace),
                 timeout=self.timeout,
             )
 
@@ -279,11 +286,13 @@ class ScriptSandbox:
             }
 
         except asyncio.TimeoutError:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = self._create_executor()
             execution_time_ms = (time.monotonic() - start_time) * 1000
             return {
                 "success": False,
                 "result": None,
-                "error": f"Script execution timed out (>{self.timeout}s)",
+                "error": f"Script execution timeout (>{self.timeout}s)",
                 "execution_time_ms": execution_time_ms,
             }
         except ScriptMemoryError as e:
@@ -309,6 +318,7 @@ class ScriptSandbox:
         self,
         script_code: str,
         safe_globals: dict[str, Any],
+        return_namespace: bool = False,
     ) -> Any:
         """
         在沙箱环境中执行脚本。
@@ -338,7 +348,13 @@ class ScriptSandbox:
                 # 检查内存使用（执行后）
                 self._check_memory_usage()
 
-                # 返回 result 变量（如果存在）
+                if return_namespace:
+                    return {
+                        key: value
+                        for key, value in safe_globals.items()
+                        if not key.startswith("__")
+                    }
+
                 return safe_globals.get("result", None)
 
             except MemoryError as e:
@@ -348,7 +364,7 @@ class ScriptSandbox:
                 raise
 
         # 在线程池中执行（避免阻塞事件循环）
-        result = await loop.run_in_executor(None, _run_script)
+        result = await loop.run_in_executor(self._executor, _run_script)
         return result
 
     def _build_restricted_globals(

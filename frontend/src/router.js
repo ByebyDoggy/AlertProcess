@@ -5,6 +5,7 @@ import ChainAnalysis from './views/ChainAnalysis.vue'
 import PoolConfig from './views/PoolConfig.vue'
 import SystemConfig from './views/SystemConfig.vue'
 import NodeDocsView from './views/NodeDocsView.vue'
+import ScriptEditorDemo from './views/ScriptEditorDemo.vue'
 
 const routes = [
   {
@@ -43,6 +44,12 @@ const routes = [
     name: 'SystemConfig',
     component: SystemConfig,
     meta: { title: 'System Configuration' }
+  },
+  {
+    path: '/script-editor-demo',
+    name: 'ScriptEditorDemo',
+    component: ScriptEditorDemo,
+    meta: { title: 'Script Editor Demo' }
   },
 ]
 
