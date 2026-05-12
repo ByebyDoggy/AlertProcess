@@ -9,7 +9,19 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    """应用配置类，使用pydantic-settings管理配置"""
+    """应用配置类，使用pydantic-settings管理配置
+
+    配置优先级（从高到低）：
+    1. 环境变量
+    2. .env.local（本地覆盖，不提交到 Git）
+    3. .env.{DEVELOPER_NAME}（开发者个人配置，不提交到 Git）
+    4. .env（全局配置，提交到 Git）
+    5. 默认值
+    """
+
+    # ── 开发者配置 ──
+    developer_name: Optional[str] = None  # 开发者名称，用于隔离数据库和配置
+    developer_db_suffix: Optional[str] = None  # 数据库文件后缀，如 "_alice"
 
     # API相关配置
     api_key: str = "default_secret_key_change_in_production"
@@ -37,6 +49,9 @@ class Settings(BaseSettings):
 
     # ARKM API配置
     arkm_cookie: Optional[str] = None
+
+    # BlockSec API配置
+    blocksec_cookie: Optional[str] = None
 
     # notify webhook url
     notify_webhook_url: Optional[str] = None
@@ -79,14 +94,22 @@ class Settings(BaseSettings):
 
 
     class Config:
-        env_file = None if os.environ.get('DOCKER_ENV') == 'true' else ".env"
+        # 支持多环境配置文件，优先级从高到低
+        env_file = None if os.environ.get('DOCKER_ENV') == 'true' else (
+            ".env.local",  # 本地覆盖（最高优先级）
+            f".env.{os.environ.get('DEVELOPER_NAME', '')}",  # 开发者个人配置
+            ".env"  # 全局配置
+        )
         env_file_encoding = "utf-8"
         case_sensitive = False
-        env_file_priority = "low"
         extra = "ignore"
 
     def model_post_init(self, __context) -> None:
-        """解析 apipool_pool_map / block_time_config 的 JSON 字符串格式"""
+        """解析 apipool_pool_map / block_time_config 的 JSON 字符串格式
+
+        并应用开发者数据库后缀
+        """
+        # 解析 JSON 字符串格式的配置
         for attr in ("apipool_pool_map", "block_time_config"):
             val = getattr(self, attr)
             if isinstance(val, str):
@@ -94,6 +117,43 @@ class Settings(BaseSettings):
                     setattr(self, attr, json.loads(val))
                 except (json.JSONDecodeError, TypeError):
                     setattr(self, attr, {})
+
+        # 应用开发者数据库后缀
+        self._apply_developer_db_suffix()
+
+    def _apply_developer_db_suffix(self) -> None:
+        """为数据库 URL 应用开发者后缀
+
+        示例:
+            database_url = "sqlite:///./alerts.db"
+            developer_db_suffix = "_alice"
+            结果: "sqlite:///./alerts_alice.db"
+        """
+        # 优先使用 developer_db_suffix，其次使用 developer_name
+        suffix = self.developer_db_suffix or (
+            f"_{self.developer_name}" if self.developer_name else ""
+        )
+
+        if suffix and self.database_url:
+            # 处理 SQLite URL
+            if self.database_url.startswith("sqlite:///"):
+                db_path = self.database_url.replace("sqlite:///", "")
+                if db_path.endswith(".db"):
+                    db_path = db_path[:-3] + suffix + ".db"
+                    self.database_url = f"sqlite:///{db_path}"
+                    logger.info(f"[Settings] Applied developer DB suffix: {self.database_url}")
+            # 可以扩展支持其他数据库类型
+            elif "postgresql" in self.database_url or "mysql" in self.database_url:
+                # 对于 PostgreSQL/MySQL，可以修改数据库名
+                # 例如: postgresql://user:pass@localhost/alerts -> postgresql://user:pass@localhost/alerts_alice
+                if "/" in self.database_url:
+                    parts = self.database_url.rsplit("/", 1)
+                    if len(parts) == 2:
+                        db_name = parts[1].split("?")[0]  # 移除查询参数
+                        query_params = "?" + parts[1].split("?")[1] if "?" in parts[1] else ""
+                        new_db_name = db_name + suffix
+                        self.database_url = f"{parts[0]}/{new_db_name}{query_params}"
+                        logger.info(f"[Settings] Applied developer DB suffix: {self.database_url}")
 
     # ── .env 持久化 ──
 

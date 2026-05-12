@@ -19,83 +19,24 @@ from nodes.base import (
     NodeRegistry,
 )
 
+# 使用契约层的模型
+from contracts.rule_chain import (
+    RuleNode,
+    RuleEdge,
+    RuleChainCreateRequest as RuleChainCreate,
+    RuleChainUpdateRequest as RuleChainUpdate,
+    RuleChainResponse,
+    ValidateRequest,
+    ValidateError,
+    ValidateResponse,
+)
+
 
 ruleChainRouter = APIRouter(
     prefix="/rule-chain",
     tags=["rule-chain"]
 )
 logger = logging.getLogger(__name__)
-
-
-class RuleNode(BaseModel):
-    id: str
-    type: str
-    label: str = ""
-    config: dict[str, Any] = Field(default_factory=dict)
-    position: dict[str, Any] = Field(default_factory=lambda: {"x": 0, "y": 0})
-
-
-class RuleEdge(BaseModel):
-    id: str = ""
-    source: str
-    source_port: str = Field(default="output", alias="sourcePort")
-    target: str
-    target_port: str = Field(default="input", alias="targetPort")
-    label: str = ""
-    input_transformer: Optional[dict[str, Any]] = Field(default=None, alias="inputTransformer")
-
-    model_config = {"populate_by_name": True}
-
-
-class RuleChainCreate(BaseModel):
-    name: str
-    description: Optional[str] = ""
-    enabled: bool = True
-    nodes: list[RuleNode] = Field(default_factory=list)
-    edges: list[RuleEdge] = Field(default_factory=list)
-
-
-class RuleChainUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    enabled: Optional[bool] = None
-    nodes: Optional[list[RuleNode]] = None
-    edges: Optional[list[RuleEdge]] = None
-
-
-class RuleChainResponse(BaseModel):
-    id: str
-    name: str
-    description: Optional[str]
-    enabled: bool
-    chain_config: dict
-    created_at: datetime
-    updated_at: datetime
-
-
-class ValidateRequest(BaseModel):
-    nodes: list[RuleNode]
-    edges: list[RuleEdge] = Field(default_factory=list)
-
-
-class ValidateError(BaseModel):
-    type: Literal["error", "warning"] = "error"
-    code: str
-    severity: Literal["error", "warning"] = "error"
-    field: str = ""
-    field_path: str = ""
-    message: str
-    node_id: Optional[str] = None
-    edge_id: Optional[str] = None
-    suggestion: Optional[str] = None
-
-
-class ValidateResponse(BaseModel):
-    valid: bool
-    errors: list[ValidateError] = Field(default_factory=list)
-    warnings: list[ValidateError] = Field(default_factory=list)
-    normalized_config: Optional[dict[str, Any]] = None
-    stats: Optional[dict[str, Any]] = None
 
 
 # ── 单节点测试模型 ──
@@ -166,15 +107,16 @@ def _edge_to_storage(edge: RuleEdge) -> dict[str, Any]:
     return edge.model_dump(by_alias=True, exclude_none=True)
 
 
-def build_chain_config(nodes: list[RuleNode], edges: list[RuleEdge]) -> dict[str, Any]:
+def build_chain_config(nodes: list[RuleNode], edges: list[RuleEdge], sequence_phases: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     return {
         "nodes": [_node_to_storage(node) for node in nodes],
         "edges": [_edge_to_storage(edge) for edge in edges],
+        "sequence_phases": sequence_phases or [],
     }
 
 
-def _parse_chain_payload(nodes: list[RuleNode], edges: list[RuleEdge]):
-    normalized_config = build_chain_config(nodes, edges)
+def _parse_chain_payload(nodes: list[RuleNode], edges: list[RuleEdge], sequence_phases: Optional[list[dict[str, Any]]] = None):
+    normalized_config = build_chain_config(nodes, edges, sequence_phases)
     return normalized_config, ChainParser.parse(normalized_config)
 
 
@@ -338,7 +280,7 @@ async def create_rule_chain(
     _auth_with_key(x_api_key, api_key)
 
     chain_id = str(uuid.uuid4())
-    chain_config = build_chain_config(chain_data.nodes, chain_data.edges)
+    chain_config = build_chain_config(chain_data.nodes, chain_data.edges, chain_data.sequence_phases)
 
     db = SessionLocal()
     try:
@@ -387,15 +329,18 @@ async def update_rule_chain(
             chain.description = chain_data.description
         if chain_data.enabled is not None:
             chain.enabled = 1 if chain_data.enabled else 0
-        if chain_data.nodes is not None or chain_data.edges is not None:
+        if chain_data.nodes is not None or chain_data.edges is not None or chain_data.sequence_phases is not None:
             existing_config = json.loads(chain.chain_config) if isinstance(chain.chain_config, str) else chain.chain_config
             nodes = [RuleNode.model_validate(node) for node in existing_config.get("nodes", [])]
             edges = [RuleEdge.model_validate(edge) for edge in existing_config.get("edges", [])]
+            sequence_phases = existing_config.get("sequence_phases", [])
             if chain_data.nodes is not None:
                 nodes = chain_data.nodes
             if chain_data.edges is not None:
                 edges = chain_data.edges
-            chain.chain_config = json.dumps(build_chain_config(nodes, edges))
+            if chain_data.sequence_phases is not None:
+                sequence_phases = chain_data.sequence_phases
+            chain.chain_config = json.dumps(build_chain_config(nodes, edges, sequence_phases))
 
         chain.updated_at = datetime.now()
         db.commit()

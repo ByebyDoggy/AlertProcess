@@ -7,18 +7,17 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from database.models import SessionLocal, AlertDB, SeverityEnum
+from contracts.alert import (
+    AlertSubmitRequest,
+    AlertSubmitResponse,
+    AlertResponse,
+    AlertListResponse,
+)
 
 alertRouter = APIRouter(
     prefix="/alert",
     tags=["alert"]
 )
-
-
-class AlertSubmitRequest(BaseModel):
-    chain_id: int
-    tx_hash: str
-    attacked_address: Optional[str] = None
-    exploiter_address: Optional[str] = None
 
 
 def _auth(api_key: Optional[str] = None):
@@ -34,7 +33,7 @@ def _auth_with_key(x_api_key: Optional[str] = None, api_key: Optional[str] = Non
         raise HTTPException(status_code=401, detail="API key is required")
 
 
-@alertRouter.post("/submit")
+@alertRouter.post("/submit", response_model=AlertSubmitResponse)
 async def submit_alert(
     data: AlertSubmitRequest,
     x_api_key: Optional[str] = Header(None),
@@ -56,12 +55,12 @@ async def submit_alert(
         )
         db.add(db_alert)
         db.commit()
-        return {"status": "success", "alert_id": alert_id}
+        return AlertSubmitResponse(status="success", alert_id=alert_id)
     finally:
         db.close()
 
 
-@alertRouter.get("/alerts")
+@alertRouter.get("/alerts", response_model=AlertListResponse)
 async def list_alerts(
     skip: int = 0,
     limit: int = 100,
@@ -83,21 +82,25 @@ async def list_alerts(
         total = query.count()
         alerts = query.order_by(AlertDB.timestamp.desc()).offset(skip).limit(limit).all()
 
-        return {
-            "total": total,
-            "alerts": [
-                {
-                    "alert_id": a.alert_id,
-                    "attacked_address": a.attacked_address,
-                    "exploiter_address": a.exploiter_address,
-                    "severity": a.severity.value if a.severity else "UNKNOWN",
-                    "message": a.message,
-                    "timestamp": a.timestamp.isoformat() if a.timestamp else None,
-                    "risk_score": a.risk_score,
-                }
-                for a in alerts
-            ],
-            "skip": skip,
+        alert_responses = [
+            AlertResponse(
+                alert_id=a.alert_id,
+                attacked_address=a.attacked_address,
+                exploiter_address=a.exploiter_address,
+                severity=a.severity.value if a.severity else "UNKNOWN",
+                message=a.message,
+                timestamp=a.timestamp,
+                risk_score=a.risk_score,
+            )
+            for a in alerts
+        ]
+
+        return AlertListResponse(
+            total=total,
+            alerts=alert_responses,
+            skip=skip,
+            limit=limit,
+        )
             "limit": limit,
         }
     finally:

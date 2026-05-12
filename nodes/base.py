@@ -64,6 +64,7 @@ class NodeCategory(Enum):
     MEMORY = "memory"
     SCRIPTING = "scripting"
     STORAGE = "storage"
+    TEMPORAL = "temporal"
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +132,12 @@ CATEGORY_ALLOWED_INPUTS: dict[NodeCategory, set[str]] = {
     NodeCategory.DETECTION:  {"context", "any"},
     NodeCategory.COMPARISON: {"detection_output", "score_output"},
     NodeCategory.SCORING:    {"detection_output", "score_output"},
-    NodeCategory.LOGIC:      {"comparison_output", "logic_output"},
+    NodeCategory.LOGIC:      {"comparison_output", "logic_output", "context", "any"},
     NodeCategory.ACTION:     {"any"},
     NodeCategory.MEMORY:     {"detection_output", "score_output", "context", "any"},
     NodeCategory.SCRIPTING:  {"detection_output", "score_output", "context", "any"},
     NodeCategory.STORAGE:    set(),  # 存储节点无输入
+    NodeCategory.TEMPORAL:   {"context", "detection_output", "score_output", "logic_output", "comparison_output", "any"},
 }
 
 
@@ -446,6 +448,7 @@ class NodeRegistry:
     全局节点注册表，按 category 分组管理。
 
     使用 @register 装饰器注册节点，启动时自动导入各模块即可。
+    支持自动发现机制，无需手动维护模块列表。
     """
 
     _nodes: dict[str, type[BaseNode]] = {}
@@ -464,6 +467,59 @@ class NodeRegistry:
                 )
         cls._nodes[name] = node_class
         return node_class
+
+    @classmethod
+    def auto_discover(cls, base_package: str = "nodes") -> int:
+        """
+        自动扫描并注册节点
+
+        Args:
+            base_package: 基础包路径，默认为 "nodes"
+
+        Returns:
+            注册的节点数量
+
+        工作原理:
+            1. 递归扫描 base_package 下的所有 Python 模块
+            2. 导入模块，触发 @register 装饰器自动注册
+            3. 跳过以 _ 开头的模块（私有模块）
+            4. 跳过 base.py（基类模块）
+        """
+        import importlib
+        import pkgutil
+        import logging
+
+        logger = logging.getLogger(__name__)
+        initial_count = len(cls._nodes)
+
+        try:
+            # 导入基础包
+            base_module = importlib.import_module(base_package)
+            base_path = base_module.__path__
+
+            # 递归扫描所有子模块
+            for importer, modname, ispkg in pkgutil.walk_packages(
+                path=base_path,
+                prefix=f"{base_package}.",
+                onerror=lambda x: None
+            ):
+                # 跳过私有模块和基类模块
+                if modname.split(".")[-1].startswith("_") or modname.endswith(".base"):
+                    continue
+
+                try:
+                    importlib.import_module(modname)
+                    logger.debug(f"[NodeRegistry] Loaded module: {modname}")
+                except Exception as e:
+                    logger.warning(f"[NodeRegistry] Failed to load module {modname}: {e}")
+
+            registered_count = len(cls._nodes) - initial_count
+            logger.info(f"[NodeRegistry] Auto-discovered {registered_count} nodes from {base_package}")
+            return registered_count
+
+        except Exception as e:
+            logger.error(f"[NodeRegistry] Auto-discovery failed: {e}")
+            return 0
 
     @classmethod
     def get(cls, name: str) -> type[BaseNode] | None:
@@ -544,6 +600,7 @@ class NodeRegistry:
             NodeCategory.MEMORY: "记忆",
             NodeCategory.SCRIPTING: "脚本",
             NodeCategory.STORAGE: "存储",
+            NodeCategory.TEMPORAL: "时序",
         }
 
         result = []

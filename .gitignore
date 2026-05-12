@@ -79,6 +79,9 @@ celerybeat-schedule
 
 # Environments
 .env
+.env.local
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -112,6 +115,9 @@ venv.bak/
 *.db-wal
 *.sqlite
 *.sqlite3
+# 但保留示例数据库
+!example.db
+!schema.db
 
 # OS
 .DS_Store
