@@ -4,10 +4,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from routers import alertRouter
 from routers.rule_chain.router import ruleChainRouter
+from routers.rule_chain.debug import router as debugRouter
 from routers.knowledge_base import knowledgeBaseRouter
 from routers.detectors import trace_router, ingest_router
 from routers.pool_config.pool_config_router import poolConfigRouter
 from routers.system_config import systemConfigRouter
+from middleware.auth_middleware import JWTAuthMiddleware
 from database.models import SessionLocal
 from config import settings
 import os
@@ -47,6 +49,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add JWT authentication middleware
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-jwt-key-change-in-production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
+app.add_middleware(
+    JWTAuthMiddleware,
+    secret_key=JWT_SECRET_KEY,
+    algorithm=JWT_ALGORITHM,
+    public_paths=["/api/health", "/docs", "/openapi.json", "/redoc"]
+)
+
 # 根路径，用于健康检查
 @app.get("/api/health")
 async def health_check():
@@ -54,6 +67,7 @@ async def health_check():
 
 app.include_router(alertRouter)
 app.include_router(ruleChainRouter)
+app.include_router(debugRouter, prefix="/rule-chain")
 app.include_router(knowledgeBaseRouter)
 app.include_router(trace_router)
 app.include_router(ingest_router)
