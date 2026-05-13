@@ -206,3 +206,156 @@ class ScriptContext:
                     "events": matched,
                 })
         return matches
+
+    @cached_property
+    def _balance_changes_cache(self) -> dict[str, dict[str, float]]:
+        """缓存余额变化计算结果。"""
+        balance_changes: dict[str, dict[str, float]] = {}
+        transfers = self.get_transfers()
+
+        for transfer in transfers:
+            token = str(transfer.get("token_address", "")).lower()
+            from_addr = str(transfer.get("from_address", "")).lower()
+            to_addr = str(transfer.get("to_address", "")).lower()
+
+            try:
+                amount = float(transfer.get("amount", 0))
+            except (TypeError, ValueError):
+                amount = 0.0
+
+            if token not in balance_changes:
+                balance_changes[token] = {}
+
+            if from_addr and from_addr != "0x0000000000000000000000000000000000000000":
+                balance_changes[token][from_addr] = balance_changes[token].get(from_addr, 0.0) - amount
+
+            if to_addr and to_addr != "0x0000000000000000000000000000000000000000":
+                balance_changes[token][to_addr] = balance_changes[token].get(to_addr, 0.0) + amount
+
+        return balance_changes
+
+    def get_balance_changes(self, address: str | None = None, token_address: str | None = None) -> dict[str, Any]:
+        """
+        获取余额变化。
+
+        Args:
+            address: 地址过滤（可选）
+            token_address: 代币地址过滤（可选）
+
+        Returns:
+            余额变化字典，格式：
+            {
+                "token_address": {
+                    "address": balance_change (float)
+                }
+            }
+        """
+        changes = self._balance_changes_cache
+
+        if token_address:
+            token = token_address.lower()
+            changes = {token: changes.get(token, {})}
+
+        if address:
+            addr = address.lower()
+            filtered: dict[str, dict[str, float]] = {}
+            for token, addr_changes in changes.items():
+                if addr in addr_changes:
+                    filtered[token] = {addr: addr_changes[addr]}
+            changes = filtered
+
+        return changes
+
+    def calculate_price_impact(
+        self,
+        reserve_in: float,
+        reserve_out: float,
+        amount_in: float,
+        fee_rate: float = 0.003
+    ) -> float:
+        """
+        计算 AMM 价格影响（基于恒定乘积公式）。
+
+        Args:
+            reserve_in: 输入代币储备量
+            reserve_out: 输出代币储备量
+            amount_in: 输入代币数量
+            fee_rate: 手续费率（默认 0.3%）
+
+        Returns:
+            价格影响百分比（正数表示价格上涨）
+        """
+        if reserve_in <= 0 or reserve_out <= 0 or amount_in <= 0:
+            return 0.0
+
+        amount_in_with_fee = amount_in * (1 - fee_rate)
+
+        price_before = reserve_out / reserve_in
+
+        new_reserve_in = reserve_in + amount_in_with_fee
+        amount_out = (reserve_out * amount_in_with_fee) / new_reserve_in
+        new_reserve_out = reserve_out - amount_out
+
+        if new_reserve_in <= 0:
+            return 0.0
+
+        price_after = new_reserve_out / new_reserve_in
+
+        if price_before == 0:
+            return 0.0
+
+        return ((price_after - price_before) / price_before) * 100
+
+    def detect_reentrancy(self, target_contract: str | None = None) -> list[dict[str, Any]]:
+        """
+        检测重入模式（同一合约在调用栈中多次出现）。
+
+        Args:
+            target_contract: 目标合约地址（可选，为空时检测所有合约）
+
+        Returns:
+            重入模式列表，每个元素包含：
+            - contract: 合约地址
+            - depths: 出现的调用深度列表
+            - call_indices: 调用索引列表
+        """
+        calls = self.get_trace_calls()
+
+        contract_calls: dict[str, list[tuple[int, int]]] = {}
+
+        for idx, call in enumerate(calls):
+            to_addr = str(call.get("to_addr", "")).lower()
+            if not to_addr:
+                continue
+
+            if target_contract and to_addr != target_contract.lower():
+                continue
+
+            depth = call.get("depth", 0)
+
+            if to_addr not in contract_calls:
+                contract_calls[to_addr] = []
+            contract_calls[to_addr].append((depth, idx))
+
+        reentrancy_patterns: list[dict[str, Any]] = []
+
+        for contract, call_list in contract_calls.items():
+            if len(call_list) < 2:
+                continue
+
+            depths = [depth for depth, _ in call_list]
+            indices = [idx for _, idx in call_list]
+
+            for i in range(len(call_list) - 1):
+                depth1, idx1 = call_list[i]
+                depth2, idx2 = call_list[i + 1]
+
+                if depth2 > depth1:
+                    reentrancy_patterns.append({
+                        "contract": contract,
+                        "depths": [depth1, depth2],
+                        "call_indices": [idx1, idx2],
+                        "pattern": "nested_call"
+                    })
+
+        return reentrancy_patterns

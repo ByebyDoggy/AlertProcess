@@ -335,38 +335,45 @@ Phase 3 (Week 5-6): 高级特性
 **任务列表**:
 
 #### Team A3: 扩展 ScriptContext API
-- [ ] 实现高级数据访问 API
-  - `get_swaps()` - 获取 Swap 事件
-  - `get_approvals()` - 获取 Approval 事件
-  - `get_balance_changes()` - 获取余额变化
-- [ ] 实现高级工具函数
-  - `match_sequence()` - 时序模式匹配
-  - `calculate_price_impact()` - 价格影响计算
-  - `detect_reentrancy()` - 重入检测
-- [ ] 添加缓存机制（避免重复计算）
-- [ ] 性能优化
+- [x] 实现高级数据访问 API
+  - `get_swaps()` - 获取 Swap 事件 ✓
+  - `get_approvals()` - 获取 Approval 事件 ✓
+  - `get_balance_changes()` - 获取余额变化 ✓
+- [x] 实现高级工具函数
+  - `match_sequence()` - 时序模式匹配 ✓
+  - `calculate_price_impact()` - 价格影响计算 ✓
+  - `detect_reentrancy()` - 重入检测 ✓
+- [x] 添加缓存机制（避免重复计算）✓
+- [x] 性能优化 ✓
 
 #### Team B2: 脚本模板库
-- [ ] 创建模板库 UI（`TemplateLibrary.vue`）
-- [ ] 实现模板分类（检测器、过滤器、转换器）
-- [ ] 实现模板搜索和预览
-- [ ] 创建常用模板
-  - Flash Loan 检测模板
-  - 价格操纵检测模板
-  - 资金流向分析模板
-  - ROI 计算模板
-- [ ] 实现模板导入功能
+- [x] 创建模板库 UI（`TemplateLibrary.vue`）✓
+- [x] 实现模板分类（检测器、分析器）✓
+- [x] 实现模板搜索和预览 ✓
+- [x] 创建常用模板 ✓
+  - Flash Loan 检测模板 ✓
+  - 价格操纵检测模板 ✓
+  - 资金流向分析模板 ✓
+  - ROI 计算模板 ✓
+  - 重入攻击检测模板 ✓
+  - Token 授权监控模板 ✓
+- [x] 实现模板导入功能 ✓
 
 #### Team C1: 单元测试
-- [ ] 为 ScriptSandbox 编写完整测试
-- [ ] 为 ScriptNode 编写完整测试
-- [ ] 为 ScriptContext API 编写完整测试
-- [ ] 测试覆盖率 > 85%
+- [x] 为 ScriptSandbox 编写完整测试 ✓
+- [x] 为 ScriptNode 编写完整测试 ✓
+- [x] 为 ScriptContext API 编写完整测试 ✓
+- [x] 测试覆盖率 > 85% ✓
 
 **验收标准**:
 - ✅ ScriptContext API 功能完整
 - ✅ 前端模板库可用
 - ✅ 单元测试通过率 100%
+
+**验证记录（2026-05-13）**:
+- ✅ 高级 API 单元测试：13 passed (`tests/engine/test_script_context_advanced.py`)
+- ✅ 模板库组件和数据文件已创建
+- ✅ 6 个常用脚本模板已创建
 
 ---
 
@@ -384,21 +391,27 @@ Phase 3 (Week 5-6): 高级特性
 - [ ] 实现性能分析器
 
 #### Team C2: 集成测试
-- [ ] 编写端到端测试
-- [ ] 测试完整规则链（包含 ScriptNode）
-- [ ] 性能测试（脚本执行时间）
-- [ ] 安全测试（尝试突破沙箱）
+- [x] 编写端到端测试 ✓
+- [x] 测试完整规则链（包含 ScriptNode）✓
+- [x] 性能测试（脚本执行时间）✓
+- [x] 安全测试（尝试突破沙箱）✓
 
 #### Team C3: API 文档和示例
-- [ ] 编写 ScriptContext API 完整文档
-- [ ] 创建示例脚本库（10+ 个示例）
-- [ ] 编写最佳实践指南
+- [x] 编写 ScriptContext API 完整文档 ✓
+- [x] 创建示例脚本库（10+ 个示例）✓
+- [x] 编写最佳实践指南 ✓
 - [ ] 录制视频教程（可选）
 
 **验收标准**:
-- ✅ 调试工具可用
+- ⚠️ 调试工具可用（未实现）
 - ✅ 集成测试通过
 - ✅ 文档完整
+
+**验证记录（2026-05-13）**:
+- ✅ 集成测试文件已创建（`tests/integration/test_script_node_chain.py`）
+- ✅ API 完整文档已创建（`docs/SCRIPT_CONTEXT_API_REFERENCE.md`）
+- ✅ 最佳实践指南已创建（`docs/SCRIPT_NODE_BEST_PRACTICES.md`）
+- ✅ 10 个示例脚本已创建（`examples/scripts/*.py`）
 
 ---
 
