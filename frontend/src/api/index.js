@@ -1,15 +1,17 @@
 const API_BASE = ''
 
 class ApiService {
-  constructor() {
-    this.apiKey = localStorage.getItem('api_key') || 'default-api-key'
-  }
+  constructor() {}
 
   _headers() {
-    return {
+    const token = localStorage.getItem('chaindetector_token')
+    const headers = {
       'Content-Type': 'application/json',
-      'X-API-Key': this.apiKey,
     }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+    return headers
   }
 
   async request(url, options = {}) {
@@ -23,11 +25,6 @@ class ApiService {
       throw new Error(err.detail || `HTTP ${resp.status}`)
     }
     return resp.json()
-  }
-
-  setApiKey(key) {
-    this.apiKey = key
-    localStorage.setItem('api_key', key)
   }
 }
 

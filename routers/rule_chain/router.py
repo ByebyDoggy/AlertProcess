@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Any, Literal
@@ -89,14 +89,6 @@ def get_db():
         return db
     finally:
         pass
-
-
-def _auth_with_key(x_api_key: Optional[str], api_key: Optional[str]) -> None:
-    from config import settings
-
-    auth_key = x_api_key if x_api_key else api_key
-    if not auth_key or auth_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def _node_to_storage(node: RuleNode) -> dict[str, Any]:
@@ -218,10 +210,7 @@ def _get_mcp_schema_bundle() -> dict[str, Any]:
 
 @ruleChainRouter.get("/", response_model=list[RuleChainResponse])
 async def list_rule_chains(
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -246,10 +235,7 @@ async def list_rule_chains(
 @ruleChainRouter.get("/{chain_id}", response_model=RuleChainResponse)
 async def get_rule_chain(
         chain_id: str,
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -274,10 +260,7 @@ async def get_rule_chain(
 @ruleChainRouter.post("/", response_model=RuleChainResponse)
 async def create_rule_chain(
         chain_data: RuleChainCreate,
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
-    _auth_with_key(x_api_key, api_key)
 
     chain_id = str(uuid.uuid4())
     chain_config = build_chain_config(chain_data.nodes, chain_data.edges, chain_data.sequence_phases)
@@ -312,10 +295,7 @@ async def create_rule_chain(
 async def update_rule_chain(
         chain_id: str,
         chain_data: RuleChainUpdate,
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -363,10 +343,7 @@ async def update_rule_chain(
 @ruleChainRouter.delete("/{chain_id}")
 async def delete_rule_chain(
         chain_id: str,
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -444,14 +421,7 @@ def _check_expectations(ctx, sample: KnowledgeBaseDB | None) -> tuple[bool, dict
 async def test_run_chain(
     chain_id: str,
     body: TestRunRequest,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    """
-    用知识库样本或自定义数据测试运行规则链（dry-run 模式）。
-    Action 节点仅模拟执行，不会产生实际副作用。
-    """
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -536,8 +506,6 @@ async def test_run_chain(
 @ruleChainRouter.post("/validate", response_model=ValidateResponse)
 async def validate_chain(
         data: ValidateRequest,
-        x_api_key: Optional[str] = Header(None),
-        api_key: Optional[str] = None
 ):
     """
     验证规则链配置是否合法。
@@ -814,10 +782,7 @@ async def get_mcp_schema():
 @ruleChainRouter.post("/ai/generate", response_model=AIRuleChainGenerateResponse)
 async def generate_rule_chain_with_ai(
     data: AIRuleChainGenerateRequest,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
     from services.ai.client import AIClientError
     from services.ai.rule_chain_generator import RuleChainGenerationError, generate_rule_chain_draft
 

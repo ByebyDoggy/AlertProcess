@@ -2,14 +2,22 @@
 
 ## 文档信息
 
-- **版本**: v1.1
+- **版本**: v1.2
 - **日期**: 2026-05-13
-- **状态**: Phase 1 已验证
+- **状态**: ✅ Phase 1-3 全部完成
 - **目标**: 引入 ScriptNode 实现灵活的脚本化检测能力
 
 ## 重要说明
 
 ⚠️ **本次重构不保证向后兼容** - 我们将大刀阔斧地重构规则链引擎，优先考虑架构清晰度和易用性。
+
+## 2026-05-15 认证与 dry-run 回归修复
+
+本阶段清理 AlertProcessor 主入口的旧 API Key 认证，统一改为共享 JWT Bearer Token 认证行为：前端请求读取 `chaindetector_token` 并发送 `Authorization: Bearer <token>`，规则链、系统配置和告警主路由不再接收 `X-API-Key` 或 `api_key` 参数，MCP 客户端改用 `ALERT_PROCESSOR_TOKEN`。
+
+Action 节点 dry-run 语义调整为纯模拟执行。`BaseAction.execute()` 在 `__dry_run__` 上下文中不再调用子类 `process()`，因此 Webhook、Telegram 等副作用动作不会发出真实请求，并会返回 `{"dry_run": true, "simulated": true, "skipped": true}` 的模拟执行结果。
+
+新增回归测试覆盖三类风险：JWT 与旧 API Key 认证路径、dry-run 不触发副作用、AI/MCP 客户端与封装逻辑。已通过针对性测试：`pytest tests/test_auth_middleware.py tests/nodes/test_action_dry_run.py tests/test_ai_mcp.py -q`；前端 `npm --prefix frontend run build` 构建通过。全量 `pytest tests -q` 当前仍受既有 validator / integration 测试失败与超时影响，未作为本阶段新增回归失败处理。
 
 ## 目录
 

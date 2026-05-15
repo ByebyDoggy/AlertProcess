@@ -73,13 +73,13 @@ class BaseAction(BaseNode):
         upstream = self._first_input(inputs)
         merged_context = self._merge_context(context, upstream)
 
-        # Dry-run 模式：Action 节点仅模拟，不实际执行副作用
         if context.get("__dry_run__"):
-            result = {"dry_run": True, "simulated": True, "action_type": self.name}
-            output = ActionOutputMixin(
+            output = self.OutputModel(
                 score=upstream.score if upstream else 0.0,
                 passed=upstream.passed if upstream else True,
-                action_result=result,
+                severity=upstream.severity if upstream else "UNKNOWN",
+                labels=upstream.labels if upstream else [],
+                action_result={"dry_run": True, "simulated": True, "skipped": True},
             )
             final_context = merged_context
         else:

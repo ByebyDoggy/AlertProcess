@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -44,12 +44,6 @@ class AIConfigTestResponse(BaseModel):
     error: Optional[dict] = None
 
 
-def _auth_with_key(x_api_key: Optional[str], api_key: Optional[str]) -> None:
-    auth_key = x_api_key if x_api_key else api_key
-    if not auth_key:
-        raise HTTPException(status_code=401, detail="API key is required")
-
-
 def _masked_ai_config() -> AIConfigResponse:
     from config.model import settings
 
@@ -66,18 +60,14 @@ def _masked_ai_config() -> AIConfigResponse:
 
 
 @systemConfigRouter.get("/ai-config", response_model=AIConfigResponse)
-async def get_ai_config(x_api_key: Optional[str] = Header(None), api_key: Optional[str] = None):
-    _auth_with_key(x_api_key, api_key)
+async def get_ai_config():
     return _masked_ai_config()
 
 
 @systemConfigRouter.put("/ai-config", response_model=AIConfigResponse)
 async def update_ai_config(
     body: AIConfigUpdate,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
     from config.model import settings
 
     if body.enabled is not None:
@@ -114,10 +104,7 @@ async def update_ai_config(
 @systemConfigRouter.post("/ai-config/test", response_model=AIConfigTestResponse)
 async def test_ai_config(
     body: AIConfigTestRequest,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
     from services.ai.client import AIClientError, OpenAICompatibleClient
     import time
 

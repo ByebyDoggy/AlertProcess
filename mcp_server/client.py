@@ -7,12 +7,14 @@ import httpx
 
 
 class AlertProcessorClient:
-    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, token: str | None = None) -> None:
         self.base_url = (base_url or os.getenv("ALERT_PROCESSOR_BASE_URL") or "http://localhost:8000").rstrip("/")
-        self.api_key = api_key or os.getenv("ALERT_PROCESSOR_API_KEY") or "default_secret_key_change_in_production"
+        self.token = token or os.getenv("ALERT_PROCESSOR_TOKEN") or ""
 
     async def request(self, method: str, path: str, json_body: dict[str, Any] | None = None) -> Any:
-        headers = {"X-API-Key": self.api_key, "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.request(method, f"{self.base_url}{path}", headers=headers, json=json_body)
         resp.raise_for_status()

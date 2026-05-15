@@ -3,8 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
 
 from database.models import SessionLocal, AlertDB, SeverityEnum
 from contracts.alert import (
@@ -20,26 +19,10 @@ alertRouter = APIRouter(
 )
 
 
-def _auth(api_key: Optional[str] = None):
-    from config import settings
-    if not api_key or api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-
-def _auth_with_key(x_api_key: Optional[str] = None, api_key: Optional[str] = None):
-    from config import settings
-    key = x_api_key if x_api_key else api_key
-    if not key or key != settings.api_key:
-        raise HTTPException(status_code=401, detail="API key is required")
-
-
 @alertRouter.post("/submit", response_model=AlertSubmitResponse)
 async def submit_alert(
     data: AlertSubmitRequest,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
     alert_id = str(uuid.uuid4())
 
     db = SessionLocal()
@@ -65,10 +48,7 @@ async def list_alerts(
     skip: int = 0,
     limit: int = 100,
     severity: Optional[str] = None,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -101,8 +81,6 @@ async def list_alerts(
             skip=skip,
             limit=limit,
         )
-            "limit": limit,
-        }
     finally:
         db.close()
 
@@ -110,10 +88,7 @@ async def list_alerts(
 @alertRouter.get("/alerts/{alert_id}")
 async def get_alert(
     alert_id: str,
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
@@ -135,10 +110,7 @@ async def get_alert(
 
 @alertRouter.get("/stats")
 async def alert_stats(
-    x_api_key: Optional[str] = Header(None),
-    api_key: Optional[str] = None,
 ):
-    _auth_with_key(x_api_key, api_key)
 
     db = SessionLocal()
     try:
