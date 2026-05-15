@@ -18,6 +18,7 @@ from nodes.detectors.protocol.oracle_manipulation import OracleManipulationDetec
 from nodes.detectors.protocol.flash_loan_trace import FlashLoanTraceDetector
 from nodes.detectors.protocol.reentrancy_trace import ReentrancyTraceDetector
 from nodes.detectors.swap_burn_claim import SwapBurnClaimDetector
+from nodes.detectors.callback_third_party_drain import CallbackThirdPartyDrainDetector
 
 __all__ = [
     "BaseDetector",
@@ -39,4 +40,5 @@ __all__ = [
     "FlashLoanTraceDetector",
     "ReentrancyTraceDetector",
     "SwapBurnClaimDetector",
+    "CallbackThirdPartyDrainDetector",
 ]
