@@ -15,6 +15,13 @@ class RecordingChannel(AlertChannel):
         return DeliveryResult(channel=self.name, sent=True, dry_run=False, detail="sent")
 
 
+class RaisingChannel(AlertChannel):
+    name = "raising"
+
+    async def send(self, payload: AlertPayload) -> DeliveryResult:
+        raise RuntimeError("delivery unavailable")
+
+
 @pytest.mark.asyncio
 async def test_alert_dispatcher_dry_run_does_not_call_channel_send():
     channel = RecordingChannel()
@@ -44,6 +51,25 @@ async def test_alert_dispatcher_sends_when_not_dry_run():
     assert channel.sent == [payload]
     assert results[0].sent is True
     assert results[0].dry_run is False
+
+
+@pytest.mark.asyncio
+async def test_alert_dispatcher_isolates_channel_failures():
+    recording = RecordingChannel()
+    dispatcher = AlertDispatcher([RaisingChannel(), recording], dry_run=False)
+    payload = AlertPayload.from_detection_result(
+        tx_hash="0xabc",
+        result=DetectionResult.from_score("script", 90.0, 40.0, "attack", labels=["x"]),
+    )
+
+    results = await dispatcher.dispatch(payload)
+
+    assert recording.sent == [payload]
+    assert results[0].channel == "raising"
+    assert results[0].sent is False
+    assert results[0].dry_run is False
+    assert "send failed: delivery unavailable" in results[0].detail
+    assert results[1].sent is True
 
 
 def test_webhook_and_telegram_channels_are_safe_placeholders_until_transport_is_added():

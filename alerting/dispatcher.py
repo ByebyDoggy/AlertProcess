@@ -80,5 +80,15 @@ class AlertDispatcher:
                     DeliveryResult(channel=channel.name, sent=False, dry_run=True, detail="dry-run skipped")
                 )
                 continue
-            results.append(await channel.send(payload))
+            try:
+                results.append(await channel.send(payload))
+            except Exception as exc:
+                results.append(
+                    DeliveryResult(
+                        channel=channel.name,
+                        sent=False,
+                        dry_run=False,
+                        detail=f"send failed: {exc}",
+                    )
+                )
         return results
