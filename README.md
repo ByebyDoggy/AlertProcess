@@ -63,6 +63,18 @@ Alerting is separate from detection.
 - Channel failures are isolated so one failed channel does not prevent later channels from being attempted.
 - `WebhookChannel` and `TelegramChannel` are currently safe placeholders until real transports are added.
 
+### Log-first staged risk pipeline
+
+High-confidence single-transaction alerts use a staged pipeline:
+
+1. Parse transfer logs and compute net USD balance changes by address.
+2. Fetch transaction trace only when an address loses more than the configured USD threshold.
+3. Run script-first trace detectors through `DetectionRuntime`.
+4. Query key address creation/first-seen time only when a sensitive detector passes.
+5. Produce an alert candidate only when suspicious behavior and a fresh key address are both present.
+
+Trace and address-age lookups are provider interfaces. Unit tests use static offline providers; live Moralis, RPC, or Blocksec adapters should be added behind the same interfaces.
+
 ## Retired architecture
 
 The legacy `nodes/` directory has been removed from the main product path. The following concepts are no longer the core architecture:
