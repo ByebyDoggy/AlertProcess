@@ -33,7 +33,23 @@ def test_detection_context_from_dict_preserves_standard_and_enrichment_fields():
 def test_detection_context_reports_missing_required_inputs():
     ctx = DetectionContext.from_dict({"chain_id": 56, "tx_hash": "0xabc", "transfers": []})
 
-    assert ctx.missing_inputs(["transfers", "trace_calls", "token_prices"]) == ["trace_calls", "token_prices"]
+    assert ctx.missing_inputs(["transfers", "trace_calls", "token_prices"]) == ["transfers", "trace_calls", "token_prices"]
+
+
+def test_detection_context_reports_explicit_empty_required_inputs_as_missing():
+    ctx = DetectionContext.from_dict({
+        "transfers": [],
+        "token_prices": {},
+        "input_data": "",
+        "trace_calls": None,
+    })
+
+    assert ctx.missing_inputs(["transfers", "token_prices", "input_data", "trace_calls"]) == [
+        "transfers",
+        "token_prices",
+        "input_data",
+        "trace_calls",
+    ]
 
 
 def test_detection_result_sets_passed_from_threshold_and_severity_from_score():

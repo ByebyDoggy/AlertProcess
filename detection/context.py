@@ -64,7 +64,6 @@ class DetectionContext:
     token_decimals: dict[str, Any] = field(default_factory=dict)
     address_labels: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    _provided_fields: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DetectionContext":
@@ -88,14 +87,11 @@ class DetectionContext:
             token_decimals=_lower_dict_keys(data.get("token_decimals", {})),
             address_labels=_lower_dict_keys(data.get("address_labels", {})),
             metadata=metadata,
-            _provided_fields=set(data),
         )
 
     def missing_inputs(self, required_inputs: list[str]) -> list[str]:
         missing = []
         for name in required_inputs:
-            if name in self._provided_fields:
-                continue
             value = getattr(self, name, self.metadata.get(name))
             if value in (None, {}, [], ""):
                 missing.append(name)
@@ -104,6 +100,5 @@ class DetectionContext:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         metadata = data.pop("metadata")
-        data.pop("_provided_fields", None)
         data.update(metadata)
         return data
