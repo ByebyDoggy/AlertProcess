@@ -67,6 +67,30 @@ async def test_judao_fixture_detects_critical_with_normalized_trace_address_keys
 
 
 @pytest.mark.asyncio
+async def test_judao_fixture_detects_critical_with_raw_from_to_trace_keys():
+    script = TokenContractActiveLPDrainScript()
+    payload = build_judao_context()
+    payload["trace_calls"] = [
+        {
+            "from": call["caller"],
+            "to": call["callee"],
+            "selector": call["selector"],
+            "operation": call["operation"],
+        }
+        for call in payload["trace_calls"]
+    ]
+    ctx = DetectionContext.from_dict(payload)
+
+    result = await script.detect(ctx)
+
+    assert result.passed is True
+    assert result.severity == "CRITICAL"
+    assert result.details["token_contract_call_count"] >= 3
+    assert result.details["pair_swap_count"] >= 2
+    assert result.details["reserve_read_count"] >= 2
+
+
+@pytest.mark.asyncio
 async def test_normal_fee_token_swap_does_not_trigger_script():
     script = TokenContractActiveLPDrainScript()
     ctx = DetectionContext.from_dict(build_normal_fee_token_context())
