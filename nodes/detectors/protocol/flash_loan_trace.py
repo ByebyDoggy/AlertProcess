@@ -24,6 +24,7 @@ from nodes.detectors.base import DetectorOutputMixin
 from nodes.detectors.protocol.base import (
     AttackPattern,
     BaseProtocolAttackDetector,
+    BehaviorEvidence,
     CallStackEntry,
     PatternMatch,
 )
@@ -132,6 +133,7 @@ class FlashLoanTraceDetector(BaseProtocolAttackDetector):
         # 2. 资金流转分析
         large_value_threshold = self.config.get("large_value_threshold_wei", 50 * 10**18)
         large_value_calls = self._find_large_value_calls(call_stack, large_value_threshold)
+        behavior_evidence = self._collect_behavior_evidence(call_stack, large_value_calls)
 
         # 3. 回调后利用动作检测
         exploit_window_size = self.config.get("exploit_window_size", 4)
@@ -139,17 +141,17 @@ class FlashLoanTraceDetector(BaseProtocolAttackDetector):
         exploit_actions = self._collect_exploit_actions(call_stack)
 
         # 4. 调用深度分析
-        max_depth = max((e.depth for e in call_stack), default=0)
+        max_depth = self._max_call_depth(call_stack)
         has_delegatecall = trace_data.has_delegatecall
 
         # 5. 计算评分
-        score = self._calculate_score(matches, large_value_calls, exploit_after_callback, max_depth)
+        score = self._calculate_score(matches, large_value_calls, exploit_after_callback, max_depth, behavior_evidence)
 
         # 6. 构建检测结果
-        labels = self._build_labels(matches, large_value_calls, exploit_after_callback)
+        labels = self._build_labels(matches, large_value_calls, exploit_after_callback, behavior_evidence)
         detection = self._build_detection(
             call_stack, matches, large_value_calls, exploit_actions,
-            exploit_after_callback, max_depth, has_delegatecall, trace_data,
+            exploit_after_callback, max_depth, has_delegatecall, trace_data, behavior_evidence,
         )
 
         threshold = self.config.get("threshold", 50.0)
@@ -206,41 +208,135 @@ class FlashLoanTraceDetector(BaseProtocolAttackDetector):
             })
         return actions
 
+    def _collect_behavior_evidence(
+        self,
+        call_stack: list[CallStackEntry],
+        large_value_calls: list[CallStackEntry],
+    ) -> list[BehaviorEvidence]:
+        evidence: list[BehaviorEvidence] = []
+        if large_value_calls:
+            evidence.append(BehaviorEvidence(
+                kind="LARGE_TRANSIENT_VALUE",
+                weight=25.0,
+                description="large value movement visible in trace",
+                entries=[self._entry_summary(entry) for entry in large_value_calls[:5]],
+            ))
+
+        unique_contract_count = self._count_unique_contracts(call_stack)
+        if unique_contract_count >= 4:
+            evidence.append(BehaviorEvidence(
+                kind="POST_BORROW_FANOUT",
+                weight=20.0,
+                description="transaction fans out to multiple contracts after initial call",
+                entries=[{"unique_contract_count": unique_contract_count}],
+            ))
+
+        max_depth = self._max_call_depth(call_stack)
+        if large_value_calls and max_depth >= 2:
+            evidence.append(BehaviorEvidence(
+                kind="CALLBACK_LIKE_NESTING",
+                weight=20.0,
+                description="nested calls follow large value movement",
+                entries=[{"max_depth": max_depth}],
+            ))
+
+        if self._has_reverse_value_flow(large_value_calls):
+            evidence.append(BehaviorEvidence(
+                kind="REPAY_LIKE_REVERSE_FLOW",
+                weight=20.0,
+                description="large value returns to an earlier counterparty",
+                entries=[self._entry_summary(entry) for entry in large_value_calls[:5]],
+            ))
+
+        if large_value_calls and self._has_post_value_external_activity(call_stack, large_value_calls):
+            evidence.append(BehaviorEvidence(
+                kind="POST_BORROW_EXTERNAL_ACTIVITY",
+                weight=15.0,
+                description="calls to other contracts occur after large value movement",
+                entries=[],
+            ))
+
+        return evidence
+
+    def _has_reverse_value_flow(self, large_value_calls: list[CallStackEntry]) -> bool:
+        pairs = {(entry.from_addr, entry.to_addr) for entry in large_value_calls}
+        return any((to_addr, from_addr) in pairs for from_addr, to_addr in pairs)
+
+    def _has_post_value_external_activity(
+        self,
+        call_stack: list[CallStackEntry],
+        large_value_calls: list[CallStackEntry],
+    ) -> bool:
+        if not large_value_calls:
+            return False
+        first_large_index = min(call_stack.index(entry) for entry in large_value_calls if entry in call_stack)
+        later_targets = {
+            entry.to_addr
+            for entry in call_stack[first_large_index + 1:]
+            if entry.to_addr and entry.to_addr not in {large_value_calls[0].from_addr, large_value_calls[0].to_addr}
+        }
+        return len(later_targets) >= 2
+
+    def _selector_evidence(self, matches: list[PatternMatch], exploit_after_callback: bool) -> list[BehaviorEvidence]:
+        evidence: list[BehaviorEvidence] = []
+        for match in matches:
+            if match.matched_selectors or match.sequence_matched:
+                evidence.append(BehaviorEvidence(
+                    kind=match.pattern_name,
+                    weight=match.score_contribution,
+                    selector_based=True,
+                    description="selector/signature pattern match",
+                    entries=[{"selectors": match.matched_selectors}],
+                ))
+        if exploit_after_callback:
+            evidence.append(BehaviorEvidence(
+                kind="CALLBACK_BEFORE_EXPLOIT_SELECTOR_SEQUENCE",
+                weight=15.0,
+                selector_based=True,
+                description="known callback selector appears before known exploit selector",
+            ))
+        return evidence
+
     def _calculate_score(
         self,
         matches: list[PatternMatch],
         large_value_calls: list[CallStackEntry],
         exploit_after_callback: bool,
         max_depth: int,
+        behavior_evidence: list[BehaviorEvidence],
     ) -> float:
         """计算综合评分"""
-        if not matches and not exploit_after_callback:
+        selector_evidence = self._selector_evidence(matches, exploit_after_callback)
+        evidence = [*behavior_evidence, *selector_evidence]
+        behavior_score = sum(item.weight for item in behavior_evidence)
+        selector_bonus = min(20.0, sum(item.weight for item in selector_evidence) * 0.25)
+
+        if not behavior_evidence:
+            max_match_score = max((m.score_contribution for m in matches), default=0.0)
             if large_value_calls:
-                return 25.0
-            return 0.0
+                return min(25.0, max_match_score)
+            return self._cap_selector_only_score(max_match_score, evidence)
 
-        max_match_score = max((m.score_contribution for m in matches), default=0.0)
-        has_full_sequence = any(m.sequence_matched for m in matches)
-        if has_full_sequence:
-            max_match_score = min(100.0, max_match_score * 1.2)
-
+        score = behavior_score + selector_bonus
         if exploit_after_callback:
-            max_match_score = max(max_match_score, 80.0)
-
-        large_value_bonus = min(20.0, len(large_value_calls) * 10.0)
-        depth_bonus = min(10.0, max_depth * 1.0)
-        exploit_bonus = 15.0 if exploit_after_callback else 0.0
-
-        return min(100.0, max_match_score + large_value_bonus + depth_bonus + exploit_bonus)
+            score = max(score, 80.0)
+        if max_depth >= 3:
+            score += 5.0
+        if len(large_value_calls) >= 2:
+            score += 5.0
+        return min(100.0, score)
 
     def _build_labels(
         self,
         matches: list[PatternMatch],
         large_value_calls: list[CallStackEntry],
         exploit_after_callback: bool,
+        behavior_evidence: list[BehaviorEvidence],
     ) -> list[str]:
         """构建检测标签"""
         labels = []
+        for evidence in behavior_evidence:
+            labels.append(f"FLASH_LOAN_BEHAVIOR:{evidence.kind}")
         for m in matches:
             if m.sequence_matched:
                 labels.append(f"FLASH_LOAN_SEQUENCE:{m.pattern_name}")
@@ -264,6 +360,7 @@ class FlashLoanTraceDetector(BaseProtocolAttackDetector):
         max_depth: int,
         has_delegatecall: bool,
         trace_data: EthTraceData,
+        behavior_evidence: list[BehaviorEvidence],
     ) -> dict[str, Any]:
         """构建检测结果字典"""
         # 调用栈摘要（仅保留关键字段）
@@ -287,6 +384,7 @@ class FlashLoanTraceDetector(BaseProtocolAttackDetector):
             "has_delegatecall": has_delegatecall,
             "call_stack_size": len(call_stack),
             "pattern_matches": [m.model_dump() for m in matches],
+            "behavior_evidence": [item.model_dump() for item in behavior_evidence],
             "large_value_calls": len(large_value_calls),
             "features": {
                 "callback_before_exploit": exploit_after_callback,

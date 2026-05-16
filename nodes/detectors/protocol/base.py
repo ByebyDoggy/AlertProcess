@@ -96,12 +96,22 @@ class PatternMatch(BaseModel):
     score_contribution: float = Field(default=0.0, description="该匹配的评分贡献")
 
 
+class BehaviorEvidence(BaseModel):
+    """通用行为证据，selector_based=False 的证据可作为主触发条件。"""
+    kind: str = Field(description="证据类型")
+    weight: float = Field(default=0.0, ge=0.0, le=100.0, description="评分权重")
+    selector_based: bool = Field(default=False, description="是否来自 selector / 函数名命中")
+    description: str = Field(default="", description="证据说明")
+    entries: list[dict[str, Any]] = Field(default_factory=list, description="相关调用条目")
+
+
 # ---------------------------------------------------------------------------
 # 协议攻击检测器配置
 # ---------------------------------------------------------------------------
 
 class ProtocolAttackConfigMixin(DetectorConfigMixin):
     """协议攻击检测器通用配置"""
+    threshold: float = Field(default=50.0, ge=0, le=100, description="0-100，评分达到此值视为 passed")
     min_trace_count: int = Field(default=2, ge=1, description="最小 trace 条目数，低于此值不检测")
     max_call_depth: int = Field(default=20, ge=1, description="最大分析调用深度")
 
@@ -380,6 +390,54 @@ class BaseProtocolAttackDetector(BaseDetector):
             ))
 
         return results
+
+    @staticmethod
+    def _call_value_int(entry: CallStackEntry) -> int:
+        try:
+            return int(entry.value, 16) if str(entry.value).startswith("0x") else int(entry.value)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _entry_summary(entry: CallStackEntry) -> dict[str, Any]:
+        return {
+            "depth": entry.depth,
+            "from": entry.from_addr,
+            "to": entry.to_addr,
+            "selector": entry.function_selector,
+            "call_type": entry.call_type,
+            "value": entry.value,
+            "trace_address": entry.trace_address,
+        }
+
+    @staticmethod
+    def _max_call_depth(call_stack: list[CallStackEntry]) -> int:
+        return max((entry.depth for entry in call_stack), default=0)
+
+    @staticmethod
+    def _count_unique_contracts(call_stack: list[CallStackEntry]) -> int:
+        return len({entry.to_addr for entry in call_stack if entry.to_addr})
+
+    @staticmethod
+    def _has_delegatecall(call_stack: list[CallStackEntry]) -> bool:
+        return any(entry.call_type == "delegatecall" for entry in call_stack)
+
+    def _find_large_value_calls(
+        self,
+        call_stack: list[CallStackEntry],
+        min_value_wei: int,
+    ) -> list[CallStackEntry]:
+        return [entry for entry in call_stack if self._call_value_int(entry) >= min_value_wei]
+
+    @staticmethod
+    def _cap_selector_only_score(
+        score: float,
+        evidence: list[BehaviorEvidence],
+        cap: float = 45.0,
+    ) -> float:
+        if evidence and all(item.selector_based for item in evidence):
+            return min(score, cap)
+        return score
 
     # ── 子类可选覆盖：提取额外特征 ──
 
