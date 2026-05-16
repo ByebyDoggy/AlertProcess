@@ -19,6 +19,7 @@ from nodes.detectors.protocol.flash_loan_trace import FlashLoanTraceDetector
 from nodes.detectors.protocol.reentrancy_trace import ReentrancyTraceDetector
 from nodes.detectors.swap_burn_claim import SwapBurnClaimDetector
 from nodes.detectors.callback_third_party_drain import CallbackThirdPartyDrainDetector
+from nodes.detectors.token_contract_active_lp_drain import TokenContractActiveLPDrainDetector
 
 __all__ = [
     "BaseDetector",
@@ -41,4 +42,5 @@ __all__ = [
     "ReentrancyTraceDetector",
     "SwapBurnClaimDetector",
     "CallbackThirdPartyDrainDetector",
+    "TokenContractActiveLPDrainDetector",
 ]
