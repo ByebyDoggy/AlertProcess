@@ -39,6 +39,19 @@
         </label>
       </div>
       <div v-if="chainDataStore.currentChainId || chainDataStore.nodes.length > 0" class="flex items-center gap-2">
+        <select
+          v-if="chainDataStore.sequencePhases.length"
+          v-model="selectedPhaseId"
+          class="form-input !w-44 !py-1.5"
+        >
+          <option v-for="phase in chainDataStore.sequencePhases" :key="phase.id" :value="phase.id">
+            {{ phase.name }}
+          </option>
+        </select>
+        <button @click="addSequencePhase"
+          class="px-3 py-1.5 bg-sky-600/80 hover:bg-sky-600 rounded-lg text-white text-sm font-medium transition">
+          新增阶段
+        </button>
         <button @click="showAIPanel = true"
           class="px-3 py-1.5 bg-purple-600/80 hover:bg-purple-600 rounded-lg text-white text-sm font-medium transition">
           AI 生成规则链
@@ -82,7 +95,11 @@
         <NodePalette />
 
         <!-- Canvas -->
-        <Canvas @open-test="handleOpenNodeTest" @paste="handlePasteFromCanvas" />
+        <Canvas
+          :key="`canvas-${tabStore.activeTabId || 'none'}-${chainDataStore.activePhaseId || 'no-phase'}`"
+          @open-test="handleOpenNodeTest"
+          @paste="handlePasteFromCanvas"
+        />
       </div>
 
       <!-- Empty state when no tabs are open -->
@@ -231,9 +248,13 @@
 
             <div class="flex justify-end gap-2 pt-2">
               <button @click="aiResult = null" class="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 rounded-lg text-white text-sm">重新编辑</button>
-              <button @click="handleAIApply" :disabled="!aiResult.validation?.valid"
-                class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-[#3d3d60] rounded-lg text-white text-sm font-medium">
-                应用到画布
+              <button v-if="!aiResult.validation?.valid" @click="handleAIFix"
+                class="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 rounded-lg text-white text-sm font-medium">
+                让 AI 修正错误
+              </button>
+              <button @click="handleAIApply"
+                class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white text-sm font-medium">
+                应用到画布{{ aiResult.validation?.valid ? '' : '（忽略错误）' }}
               </button>
             </div>
           </div>
@@ -267,6 +288,7 @@ import { useChainDataStore } from '../stores/chainData.js'
 import { useChainEditorStore } from '../stores/chainEditor.js'
 import { useTabStore } from '../stores/tabStore.js'
 import { useClipboardStore } from '../stores/clipboardStore.js'
+import { useNodeTypesStore } from '../stores/nodeTypes.js'
 import { useNodeTypes } from '../composables/useNodeTypes.js'
 import { useKeyboard } from '../composables/useKeyboard.js'
 import * as chainApi from '../api/ruleChain.js'
@@ -287,6 +309,7 @@ const chainDataStore = useChainDataStore()
 const editorStore = useChainEditorStore()
 const tabStore = useTabStore()
 const clipboardStore = useClipboardStore()
+const nodeTypesStore = useNodeTypesStore()
 
 // Test run panel
 const showTestRun = ref(false)
@@ -344,6 +367,19 @@ function showToast(msg, type = 'info') {
   toastTimer = setTimeout(() => { toast.visible = false }, 3000)
 }
 
+function addSequencePhase() {
+  const phase = chainDataStore.addSequencePhase({
+    x: 80,
+    y: 80,
+    width: 1400,
+    height: 900,
+  })
+  if (tabStore.activeTab) {
+    captureViewportAndSave()
+  }
+  showToast(`已新增阶段：${phase.name}`, 'success')
+}
+
 // Selected node/edge
 const selectedNode = computed(() =>
   chainDataStore.nodes.find(n => n.id === editorStore.selectedNodeId) || null
@@ -351,6 +387,16 @@ const selectedNode = computed(() =>
 const selectedEdge = computed(() =>
   chainDataStore.edges.find(e => e.id === editorStore.selectedEdgeId) || null
 )
+const selectedPhaseId = computed({
+  get: () => chainDataStore.activePhaseId,
+  set: (value) => {
+    chainDataStore.setActivePhase(value)
+    if (tabStore.activeTab) {
+      captureViewportAndSave()
+    }
+    editorStore.clearSelection()
+  },
+})
 
 // Saving state
 const saving = ref(false)
@@ -514,6 +560,7 @@ function handleExportFile() {
     enabled: chainDataStore.chainEnabled,
     nodes: chainDataStore.nodes,
     edges: chainDataStore.edges,
+    sequence_phases: chainDataStore.sequencePhases,
   }
   const json = JSON.stringify(data, null, 2)
   const blob = new Blob([json], { type: 'application/json' })
@@ -545,6 +592,9 @@ function handleImportFile() {
           showToast('文件格式错误：缺少 edges 数组', 'error')
           return
         }
+        const importedPhases = Array.isArray(data.sequence_phases)
+          ? data.sequence_phases
+          : (Array.isArray(data.sequencePhases) ? data.sequencePhases : [])
         // 导入到当前标签页
         chainDataStore.currentChainId = null
         chainDataStore.chainName = data.name || file.name.replace(/\.json$/, '')
@@ -552,6 +602,8 @@ function handleImportFile() {
         chainDataStore.chainEnabled = data.enabled !== false
         chainDataStore.nodes = data.nodes
         chainDataStore.edges = data.edges
+        chainDataStore.sequencePhases = importedPhases
+        chainDataStore.activePhaseId = importedPhases[0]?.id || null
         editorStore.clearSelection()
         // 更新标签页名称
         if (tabStore.activeTab) {
@@ -605,7 +657,21 @@ function handleKeyboardPaste() {
   const { newNodes, newEdges, newNodeIds } = clipboardStore.paste(40, 40)
   if (newNodes.length === 0) return
 
-  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  const activePhase = chainDataStore.sequencePhases.find(phase => phase.id === chainDataStore.activePhaseId) || null
+  const normalizedNodes = newNodes.map(node => ({
+    ...node,
+    config: {
+      ...(node.config || {}),
+      ...(activePhase
+        ? {
+            sequence_phase_id: activePhase.id,
+            sequence_phase_name: activePhase.name,
+          }
+        : {}),
+    },
+  }))
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...normalizedNodes]
   chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
   chainDataStore.markDirty()
 
@@ -629,7 +695,7 @@ function getTargetNodeLabel(nodeId) {
 function onOpenFieldPicker(data) {
   fieldPickerData.nodeId = data.nodeId
   fieldPickerData.inputField = data.inputField
-  fieldPickerVisible = true
+  fieldPickerVisible.value = true
 }
 
 /** 字段选择器确认回调 — 将选中的字段映射写入边 */
@@ -638,7 +704,7 @@ function onFieldPickerConfirm(mappingInfo) {
     e => e.target === mappingInfo.targetNodeId && e.source === mappingInfo.sourceNodeId
   )
   if (edge) {
-    const currentMapping = edge.fieldMapping || {}
+    const currentMapping = { ...(edge.fieldMapping || {}) }
     currentMapping[mappingInfo.path] = {
       key: mappingInfo.path.split('.').pop(),
       type: typeof mappingInfo.value === 'object' ? 'object' :
@@ -646,8 +712,15 @@ function onFieldPickerConfirm(mappingInfo) {
       label: mappingInfo.path,
       targetKey: mappingInfo.targetKey,
     }
-    chainDataStore.updateEdge(edge.id, { fieldMapping: currentMapping })
-    showToast(`字段映射: ${mappingInfo.path} \u2192 ${mappingInfo.targetKey}`, 'success')
+    const expression = `{"${mappingInfo.targetKey}": input.${mappingInfo.path}}`
+    chainDataStore.updateEdge(edge.id, {
+      fieldMapping: currentMapping,
+      inputTransformer: {
+        language: 'python',
+        expression,
+      },
+    })
+    showToast(`字段映射: ${mappingInfo.path} → ${mappingInfo.targetKey}`, 'success')
   }
 }
 
@@ -694,6 +767,7 @@ async function handleAIGenerate() {
       current_chain: {
         nodes: chainDataStore.nodes,
         edges: chainDataStore.edges,
+        sequence_phases: chainDataStore.sequencePhases,
       },
       constraints: {
         max_nodes: 10,
@@ -714,15 +788,43 @@ async function handleAIGenerate() {
 }
 
 function handleAIApply() {
-  if (!aiResult.value?.validation?.valid || !aiResult.value?.draft) return
+  if (!aiResult.value?.draft) return
+
+  // 如果校验失败，给出警告但允许继续
+  if (!aiResult.value?.validation?.valid) {
+    const errorCount = aiResult.value?.validation?.errors?.length || 0
+    if (!confirm(`规则链存在 ${errorCount} 个错误，应用后可能无法正常运行。是否继续应用到画布？`)) {
+      return
+    }
+  }
+
   const shouldReplace = aiMode.value === 'replace' || chainDataStore.nodes.length > 0
   if (shouldReplace && !confirm('应用 AI 草稿将替换当前画布，是否继续？')) return
+
   chainDataStore.applyDraft(aiResult.value.draft)
   validationResult.value = aiResult.value.validation
   aiResult.value = null
   aiError.value = null
   showAIPanel.value = false
   showToast('AI 草稿已应用到画布', 'success')
+}
+
+async function handleAIFix() {
+  if (!aiResult.value?.validation?.errors?.length) return
+
+  // 构建修正提示词
+  const errors = aiResult.value.validation.errors.map(err =>
+    `- ${err.field_path}: ${err.message}${err.suggestion ? ` (建议: ${err.suggestion})` : ''}`
+  ).join('\n')
+
+  const fixPrompt = `当前规则链存在以下错误，请修正：\n\n${errors}\n\n原始需求：${aiPrompt.value}`
+
+  aiPrompt.value = fixPrompt
+  aiResult.value = null
+  aiError.value = null
+
+  // 自动触发重新生成
+  await handleAIGenerate()
 }
 
 // Watch chainName changes to sync tab name

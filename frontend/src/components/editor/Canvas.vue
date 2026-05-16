@@ -14,6 +14,22 @@
       class="absolute origin-top-left"
       :style="transformStyle"
     >
+      <!-- Sequence phase region -->
+      <div
+        v-if="activePhase"
+        class="sequence-phase selected"
+        :style="getPhaseStyle(activePhase)"
+      >
+        <div class="sequence-phase-header">
+          <div>
+            <div class="sequence-phase-title">{{ activePhase.name }}</div>
+            <div v-if="activePhase.description" class="sequence-phase-desc">{{ activePhase.description }}</div>
+          </div>
+          <button class="sequence-phase-delete" @click.stop="removePhase(activePhase.id)">&times;</button>
+        </div>
+        <div class="sequence-phase-footer">当前仅编辑该阶段画布</div>
+      </div>
+
       <!-- SVG Layer -->
       <svg class="absolute inset-0" style="z-index: 1; pointer-events: none; overflow: visible;">
         <defs>
@@ -30,7 +46,7 @@
 
         <!-- Edges -->
         <Edge
-          v-for="edge in edges"
+          v-for="edge in visibleEdges"
           :key="edge.id"
           :from="getEdgeFrom(edge)"
           :to="getEdgeTo(edge)"
@@ -54,7 +70,7 @@
 
       <!-- DOM Layer: Nodes -->
       <NodeCard
-        v-for="node in nodes"
+        v-for="node in visibleNodes"
         :key="node.id"
         :node="node"
         :selected="selectedNodeId === node.id || selectedNodeIds.includes(node.id)"
@@ -83,10 +99,10 @@
     </div>
 
     <!-- Empty state (outside transform container to stay centered in viewport) -->
-    <div v-if="nodes.length === 0" class="absolute inset-0 flex items-center justify-center pointer-events-none" style="z-index: 0;">
+    <div v-if="visibleNodes.length === 0" class="absolute inset-0 flex items-center justify-center pointer-events-none" style="z-index: 0;">
       <div class="empty-canvas-hint">
         <div class="empty-canvas-icon">&#x1F517;</div>
-        <div style="color: #6b7280; font-size: 14px; font-weight: 500;">拖拽节点到此处开始构建规则链</div>
+        <div style="color: #6b7280; font-size: 14px; font-weight: 500;">拖拽节点到当前阶段开始构建规则链</div>
         <div style="color: #4a4a7a; font-size: 12px; margin-top: 6px;">
           从左侧面板拖入 告警触发器 作为起点
         </div>
@@ -188,6 +204,14 @@ const clipboardStore = useClipboardStore()
 
 const nodes = computed(() => chainDataStore.nodes)
 const edges = computed(() => chainDataStore.edges)
+const sequencePhases = computed(() => chainDataStore.sequencePhases)
+const activePhase = computed(() => sequencePhases.value.find(p => p.id === chainDataStore.activePhaseId) || null)
+const visibleNodes = computed(() => {
+  if (!activePhase.value) return nodes.value
+  return nodes.value.filter(node => node.config?.sequence_phase_id === activePhase.value.id)
+})
+const visibleNodeIds = computed(() => new Set(visibleNodes.value.map(node => node.id)))
+const visibleEdges = computed(() => edges.value.filter(edge => visibleNodeIds.value.has(edge.source) && visibleNodeIds.value.has(edge.target)))
 const selectedNodeId = computed(() => editorStore.selectedNodeId)
 const selectedEdgeId = computed(() => editorStore.selectedEdgeId)
 const selectedNodeIds = computed(() => editorStore.selectedNodeIds)
@@ -244,7 +268,7 @@ function handleResetView() {
  */
 function getPortInfo(nodeId, portKey, side) {
   const node = nodes.value.find(n => n.id === nodeId)
-  if (!node || !canvasRef.value) return { x: 0, y: 0 }
+  if (!node || !visibleNodeIds.value.has(nodeId) || !canvasRef.value) return { x: 0, y: 0 }
 
   // 查找节点卡片内的端口圆圈 DOM 元素
   const nodeEl = canvasRef.value.querySelector(`[data-node-id="${nodeId}"]`)
@@ -272,7 +296,7 @@ const edgeEndpointsCache = computed(() => {
   // 递增 dragTick 强制此 computed 每帧重算，从 DOM 读取最新端口位置
   void dragTick.value
   const map = {}
-  for (const edge of edges.value) {
+  for (const edge of visibleEdges.value) {
     map[edge.id] = {
       from: getPortInfo(edge.source, edge.sourcePort || 'output', 'right'),
       to: getPortInfo(edge.target, edge.targetPort || 'input_0', 'left'),
@@ -323,6 +347,24 @@ const fixedSelectionRectStyle = computed(() => {
   }
 })
 
+function getPhaseStyle(phase) {
+  return {
+    left: `${phase.x}px`,
+    top: `${phase.y}px`,
+    width: `${phase.width}px`,
+    height: `${phase.height}px`,
+    borderColor: phase.color,
+    background: `${phase.color}10`,
+    boxShadow: `0 0 0 1px ${phase.color}`,
+  }
+}
+
+function removePhase(phaseId) {
+  if (sequencePhases.value.length <= 1) return
+  chainDataStore.removeSequencePhase(phaseId)
+  editorStore.clearSelection()
+}
+
 // 标志：刚完成框选操作，用于阻止后续 click 事件清除选中状态
 let justFinishedSelection = false
 
@@ -335,7 +377,7 @@ function screenToCanvas(clientX, clientY) {
 }
 
 function findNodesInRect(rx, ry, rw, rh) {
-  return nodes.value.filter(n => {
+  return visibleNodes.value.filter(n => {
     const nx = n.position.x
     const ny = n.position.y
     // 估算节点高度：header + 可能的面板
@@ -347,7 +389,7 @@ function findNodesInRect(rx, ry, rw, rh) {
 
 function findEdgesBetweenNodes(nodeIds) {
   const idSet = new Set(nodeIds)
-  return edges.value.filter(e => idSet.has(e.source) && idSet.has(e.target)).map(e => e.id)
+  return visibleEdges.value.filter(e => idSet.has(e.source) && idSet.has(e.target)).map(e => e.id)
 }
 
 /** 判断一条连线是否属于框选（两端节点都在 selectedNodeIds 中） */
@@ -676,7 +718,7 @@ function copySelectedToClipboard() {
     : (selectedNodeId.value ? [selectedNodeId.value] : [])
   if (ids.length === 0) return
 
-  const selectedNodes = nodes.value.filter(n => ids.includes(n.id))
+  const selectedNodes = visibleNodes.value.filter(n => ids.includes(n.id))
   clipboardStore.copy(
     selectedNodes,
     edges.value,
@@ -693,7 +735,24 @@ function pasteFromClipboard() {
   const { newNodes, newEdges, newNodeIds } = clipboardStore.paste(40, 40)
   if (newNodes.length === 0) return
 
-  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  const activePhaseId = chainDataStore.activePhaseId
+  const activePhase = activePhaseId
+    ? sequencePhases.value.find(phase => phase.id === activePhaseId) || null
+    : null
+  const normalizedNodes = newNodes.map(node => ({
+    ...node,
+    config: {
+      ...(node.config || {}),
+      ...(activePhase
+        ? {
+            sequence_phase_id: activePhase.id,
+            sequence_phase_name: activePhase.name,
+          }
+        : {}),
+    },
+  }))
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...normalizedNodes]
   chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
   chainDataStore.markDirty()
 
@@ -714,7 +773,24 @@ function pasteFromCanvasMenu() {
   )
   if (newNodes.length === 0) return
 
-  chainDataStore.nodes = [...chainDataStore.nodes, ...newNodes]
+  const activePhaseId = chainDataStore.activePhaseId
+  const activePhase = activePhaseId
+    ? sequencePhases.value.find(phase => phase.id === activePhaseId) || null
+    : null
+  const normalizedNodes = newNodes.map(node => ({
+    ...node,
+    config: {
+      ...(node.config || {}),
+      ...(activePhase
+        ? {
+            sequence_phase_id: activePhase.id,
+            sequence_phase_name: activePhase.name,
+          }
+        : {}),
+    },
+  }))
+
+  chainDataStore.nodes = [...chainDataStore.nodes, ...normalizedNodes]
   chainDataStore.edges = [...chainDataStore.edges, ...newEdges]
   chainDataStore.markDirty()
 

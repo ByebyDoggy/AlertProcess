@@ -12,6 +12,7 @@ export const CATEGORY_LABELS = {
   logic: '逻辑',
   action: '动作',
   memory: '记忆',
+  temporal: '时序',
   scripting: '脚本',
 }
 

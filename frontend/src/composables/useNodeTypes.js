@@ -9,7 +9,7 @@ export function useNodeTypes() {
   const store = useNodeTypesStore()
 
   onMounted(() => {
-    store.load()
+    store.reload()
   })
 
   return {

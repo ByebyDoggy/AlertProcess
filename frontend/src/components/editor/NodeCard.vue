@@ -170,7 +170,19 @@ const nodeType = computed(() => nodeTypesStore.getByName(props.node.type))
 /** 节点分类 class 名称 */
 const categoryClass = computed(() => {
   const cat = nodeType.value?.category || 'detection'
-  return { input: 'trigger', provider: 'provider', detection: 'detection', logic: 'logic', action: 'action', memory: 'memory', scripting: 'scripting', storage: 'storage' }[cat] || 'detection'
+  return {
+    input: 'trigger',
+    provider: 'provider',
+    detection: 'detection',
+    comparison: 'logic',
+    scoring: 'detection',
+    logic: 'logic',
+    action: 'action',
+    memory: 'memory',
+    temporal: 'memory',
+    scripting: 'scripting',
+    storage: 'storage',
+  }[cat] || 'detection'
 })
 
 const nodeStyle = computed(() => ({

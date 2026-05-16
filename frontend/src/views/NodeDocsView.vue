@@ -84,6 +84,7 @@ const CATEGORY_LABELS = {
   logic: '逻辑',
   action: '动作',
   memory: '记忆',
+  temporal: '时序',
   scripting: '脚本',
   storage: '存储',
 }
@@ -105,7 +106,7 @@ const filteredCategories = computed(() => {
   }
 
   // 按固定顺序排列分类
-  const order = ['input', 'provider', 'detection', 'comparison', 'scoring', 'logic', 'action', 'memory', 'scripting', 'storage']
+  const order = ['input', 'provider', 'detection', 'comparison', 'scoring', 'logic', 'action', 'memory', 'temporal', 'scripting', 'storage']
   return order
     .filter(k => groups[k])
     .map(k => ({ key: k, label: CATEGORY_LABELS[k] || k, nodes: groups[k] }))

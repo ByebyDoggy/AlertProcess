@@ -73,6 +73,7 @@
 
       <!-- Array of strings -->
       <div v-else-if="field.type === 'array' && field.items?.type === 'string'" class="space-y-1">
+        <div v-if="field['x-editor'] === 'field-list'" class="text-[10px] text-gray-500 mb-1">一行一个字段名，例如 tx_hash、to_address、score</div>
         <div v-for="(item, idx) in (model[key] || [])" :key="idx" class="flex gap-1">
           <input
             :value="item"

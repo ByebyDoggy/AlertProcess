@@ -1,8 +1,8 @@
 import pytest
 
-from detection import DetectionScript
-from replay import ReplayCase, ReplayExpectation, ReplayRunner
-from strategies import TokenContractActiveLPDrainScript
+from backend.detection import DetectionScript
+from backend.replay import ReplayCase, ReplayExpectation, ReplayRunner
+from backend.strategies import TokenContractActiveLPDrainScript
 from tests.fixtures.judao_token_active_lp_drain import build_judao_context, build_normal_fee_token_context
 
 

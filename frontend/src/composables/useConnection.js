@@ -156,7 +156,22 @@ export function useConnection(canvasRef) {
       return
     }
 
-    const edge = chainDataStore.addEdge(sourceId, sourcePort, targetId, targetPort)
+    const edge = chainDataStore.addEdge(
+      sourceId,
+      sourcePort,
+      targetId,
+      targetPort,
+      dragFieldMapping,
+      dragFieldMapping && Object.keys(dragFieldMapping).length === 1
+        ? {
+            language: 'python',
+            expression: (() => {
+              const [sourcePath, mapping] = Object.entries(dragFieldMapping)[0]
+              return `{"${mapping?.targetKey || sourcePath.split('.').pop()}": input.${sourcePath}}`
+            })(),
+          }
+        : null,
+    )
 
     // 如果有字段映射数据，存储到边上
     if (dragFieldMapping && edge) {

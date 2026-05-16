@@ -1,4 +1,4 @@
-from detection import DetectionContext, DetectionEvidence, DetectionResult, score_to_severity
+from backend.detection import DetectionContext, DetectionEvidence, DetectionResult, score_to_severity
 
 
 def test_detection_context_from_dict_preserves_standard_and_enrichment_fields():

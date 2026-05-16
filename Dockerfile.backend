@@ -19,8 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# 复制项目文件（不包括.env文件）
-COPY . .
+# 复制项目文件
+COPY backend/ ./backend/
+COPY tests/ ./tests/
+COPY pytest.ini .
 
 # 创建数据目录并设置root权限（确保root可读写）
 RUN mkdir -p /app/data && chmod 777 /app/data
@@ -32,4 +34,4 @@ RUN mkdir -p /app/data && chmod 777 /app/data
 EXPOSE 8000
 
 # 使用uvicorn启动FastAPI应用（root用户运行）
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "backend.main"]

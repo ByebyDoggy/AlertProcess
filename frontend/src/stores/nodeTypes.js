@@ -41,20 +41,33 @@ export const useNodeTypesStore = defineStore('nodeTypes', () => {
       logic: '逻辑',
       action: '动作',
       memory: '记忆',
+      temporal: '时序',
       scripting: '脚本',
+      storage: '存储',
     }
-    return Object.keys(groupedByCategory.value).map(cat => ({
-      key: cat,
-      label: labels[cat] || cat,
-      nodes: groupedByCategory.value[cat],
-    }))
+    const order = ['input', 'provider', 'detection', 'comparison', 'scoring', 'logic', 'action', 'memory', 'temporal', 'scripting', 'storage']
+    const known = order
+      .filter(cat => groupedByCategory.value[cat]?.length)
+      .map(cat => ({
+        key: cat,
+        label: labels[cat] || cat,
+        nodes: groupedByCategory.value[cat],
+      }))
+    const extra = Object.keys(groupedByCategory.value)
+      .filter(cat => !order.includes(cat))
+      .map(cat => ({
+        key: cat,
+        label: labels[cat] || cat,
+        nodes: groupedByCategory.value[cat],
+      }))
+    return [...known, ...extra]
   })
 
   /**
    * 从后端加载节点类型
    */
-  async function load() {
-    if (loaded.value) return
+  async function load(force = false) {
+    if (loaded.value && !force) return
     loading.value = true
     try {
       nodeTypeList.value = await fetchNodeTypes()
@@ -72,7 +85,7 @@ export const useNodeTypesStore = defineStore('nodeTypes', () => {
    */
   async function reload() {
     loaded.value = false
-    await load()
+    await load(true)
   }
 
   return {

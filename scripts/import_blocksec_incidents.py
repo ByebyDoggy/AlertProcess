@@ -80,6 +80,18 @@ class ImportStats:
     skipped_invalid: int = 0
 
 
+def normalize_tx_hash(value: Any) -> str:
+    tx_hash = str(value or "").strip().lower()
+    return tx_hash if tx_hash.startswith("0x") and len(tx_hash) == 66 else ""
+
+
+def normalize_chain_id(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -130,13 +142,9 @@ def build_alert_data(incident: dict[str, Any], tx: dict[str, Any]) -> dict[str, 
 
 
 def sample_from_incident_tx(incident: dict[str, Any], tx: dict[str, Any]) -> dict[str, Any] | None:
-    tx_hash = str(tx.get("tx_hash") or "").lower()
-    chain_id = tx.get("chain_id")
-    try:
-        chain_id = int(chain_id)
-    except (TypeError, ValueError):
-        return None
-    if not tx_hash.startswith("0x") or len(tx_hash) != 66:
+    tx_hash = normalize_tx_hash(tx.get("tx_hash"))
+    chain_id = normalize_chain_id(tx.get("chain_id"))
+    if not tx_hash or chain_id is None:
         return None
 
     root_cause = str(incident.get("root_cause") or "")
@@ -157,8 +165,14 @@ def sample_from_incident_tx(incident: dict[str, Any], tx: dict[str, Any]) -> dic
         "chain_id": chain_id,
         "tx_hash": tx_hash,
         "attacked_address": None,
-        "exploiter_address": tx.get("attacker") or None,
-        "alert_data": build_alert_data(incident, tx),
+        "exploiter_address": (str(tx.get("attacker") or "").strip() or None),
+        "alert_data": build_alert_data(incident, {
+            **tx,
+            "tx_hash": tx_hash,
+            "chain_id": chain_id,
+            "attacker": str(tx.get("attacker") or "").strip() or None,
+            "label": str(tx.get("label") or ""),
+        }),
         "expected_severity": None,
         "expected_labels": labels,
         "expected_min_score": None,

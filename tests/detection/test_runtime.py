@@ -1,6 +1,6 @@
 import pytest
 
-from detection import DetectionContext, DetectionResult, DetectionRuntime, DetectionScript, StrategyPack
+from backend.detection import DetectionContext, DetectionResult, DetectionRuntime, DetectionScript, StrategyPack
 
 
 class PassingScript(DetectionScript):

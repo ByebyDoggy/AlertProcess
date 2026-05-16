@@ -1,7 +1,7 @@
 import pytest
 
-from alerting import AlertChannel, AlertDispatcher, AlertPayload, DeliveryResult, TelegramChannel, WebhookChannel
-from detection import DetectionResult
+from backend.alerting import AlertChannel, AlertDispatcher, AlertPayload, DeliveryResult, TelegramChannel, WebhookChannel
+from backend.detection import DetectionResult
 
 
 class RecordingChannel(AlertChannel):

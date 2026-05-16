@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+from backend.detection.context import DetectionContext
+from backend.detection.result import DetectionResult
+from backend.detection.script import DetectionScript
+
+
+@dataclass
+class StrategyPack:
+    id: str
+    version: str
+    scripts: list[DetectionScript]
+    name: str = ""
+    description: str = ""
+
+
+@dataclass
+class RuntimeResult:
+    strategy_id: str = ""
+    results: list[DetectionResult] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return not self.errors
+
+    @property
+    def alert_candidates(self) -> list[DetectionResult]:
+        return [result for result in self.results if result.passed]
+
+
+class DetectionRuntime:
+    def __init__(self, scripts: list[DetectionScript], strategy_id: str = "") -> None:
+        self.scripts = scripts
+        self.strategy_id = strategy_id
+
+    @classmethod
+    def from_pack(cls, pack: StrategyPack) -> "DetectionRuntime":
+        return cls(pack.scripts, strategy_id=pack.id)
+
+    async def run(self, ctx: DetectionContext) -> RuntimeResult:
+        runtime_result = RuntimeResult(strategy_id=self.strategy_id)
+        tasks = [self._run_script(script, ctx) for script in self.scripts]
+        outcomes = await asyncio.gather(*tasks)
+        for result, error in outcomes:
+            if result is not None:
+                runtime_result.results.append(result)
+            if error is not None:
+                runtime_result.errors.append(error)
+        return runtime_result
+
+    async def _run_script(
+        self,
+        script: DetectionScript,
+        ctx: DetectionContext,
+    ) -> tuple[DetectionResult | None, dict[str, Any] | None]:
+        missing_inputs = script.missing_inputs(ctx)
+        if missing_inputs:
+            return None, {
+                "script_id": script.id,
+                "missing_inputs": missing_inputs,
+                "error": "Missing required inputs",
+            }
+
+        try:
+            result = await script.detect(ctx)
+        except Exception as exc:
+            return None, {"script_id": script.id, "error": str(exc)}
+
+        if self.strategy_id:
+            result = self._with_strategy_id(result, self.strategy_id)
+        return result, None
+
+    @staticmethod
+    def _with_strategy_id(result: DetectionResult, strategy_id: str) -> DetectionResult:
+        model_copy = getattr(result, "model_copy", None)
+        if callable(model_copy):
+            return model_copy(update={"strategy_id": strategy_id})
+        return replace(result, strategy_id=strategy_id)

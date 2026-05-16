@@ -1,9 +1,55 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { generateId, deepClone } from '../utils/helpers.js'
 import * as chainApi from '../api/ruleChain.js'
 import { useNodeTypesStore } from './nodeTypes.js'
 import { useTabStore } from './tabStore.js'
+
+const DEFAULT_SEQUENCE_PHASES = [
+  {
+    id: 'phase_1',
+    name: '阶段 1',
+    description: '循环开始阶段',
+    color: '#8b5cf6',
+    x: 60,
+    y: 80,
+    width: 560,
+    height: 320,
+  },
+  {
+    id: 'phase_2',
+    name: '阶段 2',
+    description: '中间处理阶段',
+    color: '#06b6d4',
+    x: 680,
+    y: 80,
+    width: 560,
+    height: 320,
+  },
+  {
+    id: 'phase_3',
+    name: '阶段 3',
+    description: '闭环确认阶段',
+    color: '#f59e0b',
+    x: 1300,
+    y: 80,
+    width: 560,
+    height: 320,
+  },
+]
+
+function normalizeSequencePhases(phases = []) {
+  return phases.map((phase, index) => ({
+    id: phase.id || generateId('phase'),
+    name: phase.name || `阶段 ${index + 1}`,
+    description: phase.description || '',
+    color: phase.color || DEFAULT_SEQUENCE_PHASES[index % DEFAULT_SEQUENCE_PHASES.length]?.color || '#8b5cf6',
+    x: Number.isFinite(phase.x) ? phase.x : 60 + index * 620,
+    y: Number.isFinite(phase.y) ? phase.y : 80,
+    width: Number.isFinite(phase.width) ? phase.width : 560,
+    height: Number.isFinite(phase.height) ? phase.height : 320,
+  }))
+}
 
 export const useChainDataStore = defineStore('chainData', () => {
   const chains = ref([])
@@ -15,6 +61,8 @@ export const useChainDataStore = defineStore('chainData', () => {
   const chainEnabled = ref(true)
   const nodes = ref([])
   const edges = ref([])
+  const sequencePhases = ref([])
+  const activePhaseId = ref(null)
 
   // 脏标记：避免 isModified 每次 JSON.stringify
   const _dirty = ref(false)
@@ -34,6 +82,7 @@ export const useChainDataStore = defineStore('chainData', () => {
       chain.name !== chainName.value ||
       chain.description !== chainDescription.value ||
       chain.enabled !== chainEnabled.value ||
+      JSON.stringify(cfg.sequence_phases || []) !== JSON.stringify(sequencePhases.value) ||
       JSON.stringify(cfg.nodes) !== JSON.stringify(nodes.value) ||
       JSON.stringify(cfg.edges) !== JSON.stringify(edges.value)
     )
@@ -52,13 +101,17 @@ export const useChainDataStore = defineStore('chainData', () => {
   }
 
   function loadChain(chain) {
+    const cfg = chain.chain_config || {}
     currentChainId.value = chain.id
     chainName.value = chain.name
     chainDescription.value = chain.description || ''
     chainEnabled.value = chain.enabled
-    const cfg = chain.chain_config || {}
     nodes.value = deepClone(cfg.nodes || [])
     edges.value = deepClone(cfg.edges || [])
+    sequencePhases.value = normalizeSequencePhases(cfg.sequence_phases || [])
+    activePhaseId.value = sequencePhases.value[0]?.id || null
+    nodeTestResults.value = {}
+    nodeTestInputs.value = {}
     _dirty.value = false
   }
 
@@ -69,6 +122,11 @@ export const useChainDataStore = defineStore('chainData', () => {
     chainEnabled.value = false
     nodes.value = []
     edges.value = []
+    sequencePhases.value = deepClone(DEFAULT_SEQUENCE_PHASES)
+    activePhaseId.value = sequencePhases.value[0]?.id || null
+    nodeTestResults.value = {}
+    nodeTestInputs.value = {}
+    _dirty.value = false
   }
 
   // ─── 多标签页数据同步 ───
@@ -86,6 +144,8 @@ export const useChainDataStore = defineStore('chainData', () => {
       enabled: chainEnabled.value,
       nodes: deepClone(nodes.value),
       edges: deepClone(edges.value),
+      sequencePhases: deepClone(sequencePhases.value),
+      activePhaseId: activePhaseId.value,
       nodeTestResults: deepClone(nodeTestResults.value),
       nodeTestInputs: deepClone(nodeTestInputs.value),
       isModified: isModified.value,
@@ -123,6 +183,8 @@ export const useChainDataStore = defineStore('chainData', () => {
     chainEnabled.value = tab.enabled !== false
     nodes.value = deepClone(tab.nodes || [])
     edges.value = deepClone(tab.edges || [])
+    sequencePhases.value = normalizeSequencePhases(tab.sequencePhases || [])
+    activePhaseId.value = tab.activePhaseId || sequencePhases.value[0]?.id || null
     nodeTestResults.value = deepClone(tab.nodeTestResults || {})
     nodeTestInputs.value = deepClone(tab.nodeTestInputs || {})
     _dirty.value = false
@@ -134,12 +196,21 @@ export const useChainDataStore = defineStore('chainData', () => {
     const nodeType = nodeTypesStore.getByName(nodeTypeName)
     const label = nodeType?.label || nodeTypeName
     const defaultConfig = nodeType?.default_config || {}
+    const activePhase = sequencePhases.value.find(phase => phase.id === activePhaseId.value) || null
 
     const node = {
       id: generateId('node'),
       type: nodeTypeName,
       label,
-      config: deepClone(defaultConfig),
+      config: {
+        ...deepClone(defaultConfig),
+        ...(activePhase
+          ? {
+              sequence_phase_id: activePhase.id,
+              sequence_phase_name: activePhase.name,
+            }
+          : {}),
+      },
       position: { x: Math.max(0, x), y: Math.max(0, y) },
     }
 
@@ -178,7 +249,12 @@ export const useChainDataStore = defineStore('chainData', () => {
   function updateNodePosition(nodeId, x, y) {
     const idx = nodes.value.findIndex(n => n.id === nodeId)
     if (idx !== -1) {
-      nodes.value[idx] = { ...nodes.value[idx], position: { x, y } }
+      const node = nodes.value[idx]
+      nodes.value[idx] = {
+        ...node,
+        position: { x, y },
+        config: { ...(node.config || {}) },
+      }
       markDirty()
     }
   }
@@ -194,6 +270,7 @@ export const useChainDataStore = defineStore('chainData', () => {
     const idMap = {} // oldId → newId
     const newNodes = []
     const idSet = new Set(nodeIds)
+    const activePhase = sequencePhases.value.find(phase => phase.id === activePhaseId.value) || null
 
     // 1. 复制节点
     for (const id of nodeIds) {
@@ -204,6 +281,15 @@ export const useChainDataStore = defineStore('chainData', () => {
       newNodes.push({
         ...deepClone(src),
         id: newId,
+        config: {
+          ...(deepClone(src.config || {})),
+          ...(activePhase
+            ? {
+                sequence_phase_id: activePhase.id,
+                sequence_phase_name: activePhase.name,
+              }
+            : {}),
+        },
         position: {
           x: src.position.x + offsetX,
           y: src.position.y + offsetY,
@@ -323,6 +409,7 @@ export const useChainDataStore = defineStore('chainData', () => {
       enabled: chainEnabled.value,
       nodes: nodes.value,
       edges: edges.value,
+      sequence_phases: sequencePhases.value,
     }
     let result
     if (currentChainId.value) {
@@ -360,9 +447,95 @@ export const useChainDataStore = defineStore('chainData', () => {
     }
   }
 
+  function getPhaseForNode(node) {
+    const phaseId = node.config?.sequence_phase_id
+    if (phaseId) {
+      return sequencePhases.value.find(phase => phase.id === phaseId) || null
+    }
+    return null
+  }
+
+  function assignNodeToPhase(nodeId, phaseId = activePhaseId.value) {
+    const idx = nodes.value.findIndex(n => n.id === nodeId)
+    if (idx === -1) return null
+    const node = nodes.value[idx]
+    const phase = phaseId
+      ? sequencePhases.value.find(item => item.id === phaseId) || null
+      : null
+    const nextConfig = { ...(node.config || {}) }
+    if (phase) {
+      nextConfig.sequence_phase_id = phase.id
+      nextConfig.sequence_phase_name = phase.name
+    } else {
+      delete nextConfig.sequence_phase_id
+      delete nextConfig.sequence_phase_name
+    }
+    nodes.value[idx] = { ...node, config: nextConfig }
+    return phase
+  }
+
+  function addSequencePhase(partial = {}) {
+    const phase = normalizeSequencePhases([{
+      id: generateId('phase'),
+      name: partial.name || `阶段 ${sequencePhases.value.length + 1}`,
+      description: partial.description || '',
+      color: partial.color,
+      x: partial.x,
+      y: partial.y,
+      width: partial.width,
+      height: partial.height,
+    }])[0]
+    sequencePhases.value = [...sequencePhases.value, phase]
+    activePhaseId.value = phase.id
+    markDirty()
+    return phase
+  }
+
+  function setActivePhase(phaseId) {
+    activePhaseId.value = phaseId
+  }
+
+  function updateSequencePhase(phaseId, updates) {
+    const idx = sequencePhases.value.findIndex(p => p.id === phaseId)
+    if (idx === -1) return
+    sequencePhases.value[idx] = { ...sequencePhases.value[idx], ...updates }
+    sequencePhases.value = [...sequencePhases.value]
+    markDirty()
+  }
+
+  function removeSequencePhase(phaseId) {
+    sequencePhases.value = sequencePhases.value.filter(p => p.id !== phaseId)
+    if (activePhaseId.value === phaseId) {
+      activePhaseId.value = sequencePhases.value[0]?.id || null
+    }
+    for (let idx = 0; idx < nodes.value.length; idx++) {
+      const node = nodes.value[idx]
+      if (node.config?.sequence_phase_id !== phaseId) continue
+      const nextConfig = { ...(node.config || {}) }
+      if (activePhaseId.value) {
+        const fallbackPhase = sequencePhases.value.find(p => p.id === activePhaseId.value) || null
+        if (fallbackPhase) {
+          nextConfig.sequence_phase_id = fallbackPhase.id
+          nextConfig.sequence_phase_name = fallbackPhase.name
+        } else {
+          delete nextConfig.sequence_phase_id
+          delete nextConfig.sequence_phase_name
+        }
+      } else {
+        delete nextConfig.sequence_phase_id
+        delete nextConfig.sequence_phase_name
+      }
+      nodes.value[idx] = { ...node, config: nextConfig }
+    }
+    markDirty()
+  }
+
   function clearCanvas() {
     nodes.value = []
     edges.value = []
+    sequencePhases.value = deepClone(DEFAULT_SEQUENCE_PHASES)
+    activePhaseId.value = sequencePhases.value[0]?.id || null
+    clearAllTestResults()
     markDirty()
   }
 
@@ -371,21 +544,35 @@ export const useChainDataStore = defineStore('chainData', () => {
     chainDescription.value = draft.description || chainDescription.value || ''
     nodes.value = deepClone(draft.nodes || [])
     edges.value = deepClone(draft.edges || [])
+    sequencePhases.value = normalizeSequencePhases(draft.sequence_phases || draft.sequencePhases || DEFAULT_SEQUENCE_PHASES)
+    activePhaseId.value = sequencePhases.value[0]?.id || null
     currentChainId.value = null
     clearAllTestResults()
+    for (const node of nodes.value) {
+      const nextConfig = { ...(node.config || {}) }
+      if (!nextConfig.sequence_phase_id && activePhaseId.value) {
+        const phase = sequencePhases.value.find(item => item.id === activePhaseId.value) || null
+        if (phase) {
+          nextConfig.sequence_phase_id = phase.id
+          nextConfig.sequence_phase_name = phase.name
+          node.config = nextConfig
+        }
+      }
+    }
     markDirty()
   }
 
   return {
     chains, loadingChains,
     currentChainId, chainName, chainDescription, chainEnabled,
-    nodes, edges,
+    nodes, edges, sequencePhases, activePhaseId,
     currentChain, isModified,
     fetchChains, loadChain, createNew,
     addNode, removeNode, updateNode, updateNodeConfig, updateNodePosition,
     duplicateNodes, markDirty,
     addEdge, removeEdge, updateEdge,
     save, deleteChain, clearCanvas, applyDraft, toggleChainEnabled,
+    getPhaseForNode, assignNodeToPhase, addSequencePhase, setActivePhase, updateSequencePhase, removeSequencePhase,
     // 节点测试
     nodeTestResults, nodeTestInputs,
     setNodeTestResult, clearNodeTestResult, clearAllTestResults,

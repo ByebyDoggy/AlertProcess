@@ -1,7 +1,7 @@
 import pytest
 
-from detection import DetectionContext
-from strategies.token_contract_active_lp_drain import TokenContractActiveLPDrainScript
+from backend.detection import DetectionContext
+from backend.strategies.token_contract_active_lp_drain import TokenContractActiveLPDrainScript
 from tests.fixtures.judao_token_active_lp_drain import (
     JUDAO,
     JUDAO_LP,

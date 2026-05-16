@@ -36,6 +36,16 @@
             <div class="text-[10px] text-gray-500 mb-1">数据类型</div>
             <div class="text-xs text-gray-300">{{ typeInfo }}</div>
           </div>
+
+          <div v-if="mappingInfo" class="p-3 rounded-lg bg-[#16162a] border border-[#2d2d50]">
+            <div class="text-[10px] text-gray-500 mb-1">字段映射</div>
+            <div class="text-xs text-emerald-300 whitespace-pre-wrap">{{ mappingInfo }}</div>
+          </div>
+
+          <div v-if="transformerInfo" class="p-3 rounded-lg bg-[#16162a] border border-[#2d2d50]">
+            <div class="text-[10px] text-gray-500 mb-1">输入转换表达式</div>
+            <div class="text-xs text-indigo-300 whitespace-pre-wrap break-all">{{ transformerInfo }}</div>
+          </div>
         </div>
 
         <div class="flex justify-end gap-2 mt-5">
@@ -86,5 +96,19 @@ const targetPortColor = computed(() => DATA_TYPE_COLORS[targetPortDef.value?.dat
 const typeInfo = computed(() => {
   if (!sourcePortDef.value) return ''
   return `${sourcePortDef.value.data_type} → ${targetPortDef.value?.data_type || '?'}`
+})
+
+const mappingInfo = computed(() => {
+  const mapping = props.edge?.fieldMapping
+  if (!mapping || Object.keys(mapping).length === 0) return ''
+  return Object.entries(mapping)
+    .map(([sourcePath, target]) => `${sourcePath} → ${target?.targetKey || '?'}`)
+    .join('\n')
+})
+
+const transformerInfo = computed(() => {
+  const transformer = props.edge?.inputTransformer
+  if (!transformer?.expression) return ''
+  return transformer.expression
 })
 </script>

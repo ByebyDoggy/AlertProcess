@@ -10,7 +10,7 @@ import { ref, computed } from 'vue'
  */
 export const useTabStore = defineStore('tabs', () => {
   // ─── 标签页列表 ───
-  const tabs = ref([])       // { id, chainId, name, description, enabled, nodes, edges, nodeTestResults, nodeTestInputs, viewport: { zoom, panX, panY }, isModified }
+  const tabs = ref([])       // { id, chainId, name, description, enabled, nodes, edges, sequencePhases, nodeTestResults, nodeTestInputs, viewport: { zoom, panX, panY }, isModified }
   const activeTabId = ref(null)
 
   // ─── 计算属性 ───
@@ -62,6 +62,8 @@ export const useTabStore = defineStore('tabs', () => {
       enabled: chain.enabled !== false,
       nodes: JSON.parse(JSON.stringify(cfg.nodes || [])),
       edges: JSON.parse(JSON.stringify(cfg.edges || [])),
+      sequencePhases: JSON.parse(JSON.stringify(cfg.sequence_phases || [])),
+      activePhaseId: (cfg.sequence_phases || [])[0]?.id || null,
       nodeTestResults: {},
       nodeTestInputs: {},
       viewport: { zoom: 1, panX: 0, panY: 0 },
@@ -88,6 +90,8 @@ export const useTabStore = defineStore('tabs', () => {
       enabled: false,
       nodes: [],
       edges: [],
+      sequencePhases: [],
+      activePhaseId: null,
       nodeTestResults: {},
       nodeTestInputs: {},
       viewport: { zoom: 1, panX: 0, panY: 0 },
