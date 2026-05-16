@@ -17,6 +17,14 @@ def _addr(value: Any) -> str:
     return str(value or "").lower()
 
 
+def _call_from(call: dict[str, Any]) -> str:
+    return _addr(call.get("caller", call.get("from_address", call.get("from"))))
+
+
+def _call_to(call: dict[str, Any]) -> str:
+    return _addr(call.get("callee", call.get("to_address", call.get("to"))))
+
+
 def _amount(value: Any) -> int:
     if isinstance(value, int):
         return value
@@ -116,7 +124,7 @@ class TokenContractActiveLPDrainScript(DetectionScript):
 
         for token in candidates:
             fund_flow_count = self._token_fund_flow_count(token, lp, transfers, stablecoins | wrapped_native)
-            call_count = sum(1 for call in trace_calls if _addr(call.get("caller")) == token)
+            call_count = sum(1 for call in trace_calls if _call_from(call) == token)
             token_is_top_profit = token == top_profit
             active_in_fund_flow = fund_flow_count > 0
             active_as_caller = call_count >= self.min_token_contract_call_count
@@ -232,7 +240,7 @@ class TokenContractActiveLPDrainScript(DetectionScript):
         label = str(labels.get(lp, labels.get(lp.lower(), ""))).lower()
         if any(marker in label for marker in ["lp", "pair", "cake-lp"]):
             return True
-        if any(_addr(call.get("callee")) == lp and _addr(call.get("selector")) in {GET_RESERVES_SELECTOR, PAIR_SWAP_SELECTOR} for call in trace_calls):
+        if any(_call_to(call) == lp and _addr(call.get("selector")) in {GET_RESERVES_SELECTOR, PAIR_SWAP_SELECTOR} for call in trace_calls):
             return True
         lp_tokens = {_addr(transfer.get("token")) for transfer in transfers if _addr(transfer.get("from")) == lp or _addr(transfer.get("to")) == lp}
         return len(lp_tokens) >= 2
@@ -269,5 +277,5 @@ class TokenContractActiveLPDrainScript(DetectionScript):
         return sum(
             1
             for call in trace_calls
-            if _addr(call.get("selector")) == selector and (not lp or _addr(call.get("callee")) == lp)
+            if _addr(call.get("selector")) == selector and (not lp or _call_to(call) == lp)
         )
