@@ -39,6 +39,32 @@ class FailingScript(DetectionScript):
         raise RuntimeError("boom")
 
 
+class DefaultInputsScript(DetectionScript):
+    id = "default_inputs_script"
+    version = "1.0.0"
+
+    async def detect(self, ctx: DetectionContext) -> DetectionResult:
+        return DetectionResult.no_match(self.id, "not used")
+
+
+class CapturingResultScript(DetectionScript):
+    id = "capturing_result_script"
+    version = "1.0.0"
+    required_inputs = []
+
+    def __init__(self) -> None:
+        self.result = DetectionResult.from_score(
+            script_id=self.id,
+            score=80.0,
+            threshold=40.0,
+            attack_type="test_attack",
+            strategy_id="script_owned_strategy",
+        )
+
+    async def detect(self, ctx: DetectionContext) -> DetectionResult:
+        return self.result
+
+
 @pytest.mark.asyncio
 async def test_runtime_executes_one_script_and_returns_result():
     runtime = DetectionRuntime([PassingScript()])
@@ -88,3 +114,36 @@ async def test_runtime_runs_strategy_pack_and_sets_strategy_id():
 
     assert result.strategy_id == "test_pack"
     assert result.results[0].strategy_id == "test_pack"
+
+
+@pytest.mark.asyncio
+async def test_runtime_applies_pack_strategy_id_without_mutating_script_result():
+    script = CapturingResultScript()
+    pack = StrategyPack(id="pack_strategy", version="1.0.0", scripts=[script])
+    ctx = DetectionContext.from_dict({"chain_id": 56, "tx_hash": "0xabc"})
+
+    result = await DetectionRuntime.from_pack(pack).run(ctx)
+
+    assert result.results[0] is not script.result
+    assert result.results[0].strategy_id == "pack_strategy"
+    assert script.result.strategy_id == "script_owned_strategy"
+
+
+@pytest.mark.asyncio
+async def test_runtime_preserves_script_strategy_id_when_runtime_id_is_empty():
+    script = CapturingResultScript()
+    ctx = DetectionContext.from_dict({"chain_id": 56, "tx_hash": "0xabc"})
+
+    result = await DetectionRuntime([script]).run(ctx)
+
+    assert result.results[0] is script.result
+    assert result.results[0].strategy_id == "script_owned_strategy"
+
+
+def test_default_required_inputs_are_not_shared_mutable_list():
+    first = DefaultInputsScript()
+    second = DefaultInputsScript()
+
+    assert isinstance(DetectionScript.required_inputs, tuple)
+    assert first.required_inputs == ()
+    assert second.required_inputs == ()

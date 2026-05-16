@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from detection.context import DetectionContext
@@ -69,5 +69,13 @@ class DetectionRuntime:
         except Exception as exc:
             return None, {"script_id": script.id, "error": str(exc)}
 
-        result.strategy_id = self.strategy_id
+        if self.strategy_id:
+            result = self._with_strategy_id(result, self.strategy_id)
         return result, None
+
+    @staticmethod
+    def _with_strategy_id(result: DetectionResult, strategy_id: str) -> DetectionResult:
+        model_copy = getattr(result, "model_copy", None)
+        if callable(model_copy):
+            return model_copy(update={"strategy_id": strategy_id})
+        return replace(result, strategy_id=strategy_id)

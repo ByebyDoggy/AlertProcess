@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -89,7 +90,7 @@ class DetectionContext:
             metadata=metadata,
         )
 
-    def missing_inputs(self, required_inputs: list[str]) -> list[str]:
+    def missing_inputs(self, required_inputs: Sequence[str]) -> list[str]:
         missing = []
         for name in required_inputs:
             value = getattr(self, name, self.metadata.get(name))
