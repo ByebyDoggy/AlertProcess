@@ -38,8 +38,21 @@ class ReplayRunner:
     async def run(self, case: ReplayCase) -> ReplayResult:
         ctx = DetectionContext.from_dict(case.context)
         runtime_result = await DetectionRuntime(case.scripts).run(ctx)
-        failures = self._check_expectations(runtime_result, case.expectation)
+        failures = self._check_runtime_errors(runtime_result)
+        failures.extend(self._check_expectations(runtime_result, case.expectation))
         return ReplayResult(case_id=case.id, runtime_result=runtime_result, failures=failures)
+
+    def _check_runtime_errors(self, runtime_result: RuntimeResult) -> list[str]:
+        failures: list[str] = []
+        for error in runtime_result.errors:
+            script_id = error.get("script_id", "<unknown>")
+            message = error.get("error", "runtime error")
+            missing_inputs = error.get("missing_inputs")
+            if missing_inputs:
+                failures.append(f"runtime error in script {script_id}: {message}; missing inputs: {missing_inputs}")
+            else:
+                failures.append(f"runtime error in script {script_id}: {message}")
+        return failures
 
     def _check_expectations(
         self,
