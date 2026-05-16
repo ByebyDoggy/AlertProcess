@@ -1,8 +1,12 @@
-"""tests/conftest.py — 确保所有测试的节点注册表已初始化"""
+"""tests/conftest.py — shared test fixtures."""
 import pytest
 
-from nodes import init_registry
-init_registry()
+try:
+    from nodes import init_registry
+except ModuleNotFoundError:
+    init_registry = None
+else:
+    init_registry()
 
 
 @pytest.fixture
