@@ -147,3 +147,38 @@ def test_default_required_inputs_are_not_shared_mutable_list():
     assert isinstance(DetectionScript.required_inputs, tuple)
     assert first.required_inputs == ()
     assert second.required_inputs == ()
+
+
+@pytest.mark.asyncio
+async def test_runtime_executes_scripts_concurrently():
+    import asyncio
+    execution_order = []
+
+    class SlowScript(DetectionScript):
+        id = "slow_script"
+        version = "1.0.0"
+        required_inputs = []
+
+        async def detect(self, ctx: DetectionContext) -> DetectionResult:
+            execution_order.append("slow_start")
+            await asyncio.sleep(0.05)
+            execution_order.append("slow_end")
+            return DetectionResult.no_match(self.id, "slow")
+
+    class FastScript(DetectionScript):
+        id = "fast_script"
+        version = "1.0.0"
+        required_inputs = []
+
+        async def detect(self, ctx: DetectionContext) -> DetectionResult:
+            execution_order.append("fast_start")
+            await asyncio.sleep(0.01)
+            execution_order.append("fast_end")
+            return DetectionResult.no_match(self.id, "fast")
+
+    runtime = DetectionRuntime([SlowScript(), FastScript()])
+    ctx = DetectionContext.from_dict({"chain_id": 56, "tx_hash": "0xabc"})
+
+    await runtime.run(ctx)
+
+    assert execution_order == ["slow_start", "fast_start", "fast_end", "slow_end"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -43,8 +44,9 @@ class DetectionRuntime:
 
     async def run(self, ctx: DetectionContext) -> RuntimeResult:
         runtime_result = RuntimeResult(strategy_id=self.strategy_id)
-        for script in self.scripts:
-            result, error = await self._run_script(script, ctx)
+        tasks = [self._run_script(script, ctx) for script in self.scripts]
+        outcomes = await asyncio.gather(*tasks)
+        for result, error in outcomes:
             if result is not None:
                 runtime_result.results.append(result)
             if error is not None:
