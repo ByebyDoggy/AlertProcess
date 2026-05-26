@@ -45,7 +45,7 @@ class AIConfigTestResponse(BaseModel):
 
 
 def _masked_ai_config() -> AIConfigResponse:
-    from config.model import settings
+    from backend.config import settings
 
     return AIConfigResponse(
         enabled=bool(settings.ai_enabled),
@@ -68,7 +68,7 @@ async def get_ai_config():
 async def update_ai_config(
     body: AIConfigUpdate,
 ):
-    from config.model import settings
+    from backend.config import settings
 
     if body.enabled is not None:
         settings.ai_enabled = body.enabled
@@ -105,7 +105,10 @@ async def update_ai_config(
 async def test_ai_config(
     body: AIConfigTestRequest,
 ):
-    from services.ai.client import AIClientError, OpenAICompatibleClient
+    try:
+        from services.ai.client import AIClientError, OpenAICompatibleClient
+    except ImportError:
+        raise HTTPException(status_code=501, detail="AI client module not available in script-first platform")
     import time
 
     try:
